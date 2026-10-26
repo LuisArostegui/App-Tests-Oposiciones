@@ -4,9 +4,11 @@ import dotenv from "dotenv";
 // Resolve .env path (works in both ESM/tsx and CJS/esbuild bundle)
 function resolveEnvPath(): string {
   // process.argv[1] is the entry script path in both environments
-  const entryDir = process.argv[1] ? path.dirname(process.argv[1]) : process.cwd();
+  const entryDir = process.argv[1]
+    ? path.dirname(process.argv[1])
+    : process.cwd();
   // In production: dist/index.cjs -> go up one level to find .env
-  // In development: server/index.ts -> go up one level to find .env  
+  // In development: server/index.ts -> go up one level to find .env
   return path.resolve(entryDir, "..", ".env");
 }
 
@@ -61,7 +63,7 @@ app.use(
       httpOnly: true,
       maxAge: 30 * 24 * 60 * 60 * 1000,
     },
-  })
+  }),
 );
 
 app.use(passport.initialize());
