@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import express from "express";
 import session from "express-session";
 import { createServer, type Server } from "node:http";
@@ -28,6 +28,7 @@ let ownerId: number;
 let otherUserId: number;
 let questionId: number;
 let attemptId: number;
+let otherAttemptId: number;
 let testSuffix: string;
 const creationQuestionIds: number[] = [];
 const creationAttemptIds: number[] = [];
@@ -76,6 +77,14 @@ before(async () => {
   assert.ok(attempt);
   attemptId = attempt.id;
 
+  const otherAttempt = await storage.createAttempt({
+    testId: `sec01-foreign-${testSuffix}.json`,
+    questionOrder: [foreignQuestionId],
+    userId: otherUserId,
+  });
+  assert.ok(otherAttempt);
+  otherAttemptId = otherAttempt.id;
+
   const app = express();
   app.use(express.json());
   app.use(session({ secret: "sec01-test-only-session-secret", resave: false, saveUninitialized: false }));
@@ -106,6 +115,7 @@ after(async () => {
   for (const id of creationQuestionIds) await db.delete(schema.questions).where(eq(schema.questions.id, id));
   if (questionId) await db.delete(schema.questions).where(eq(schema.questions.id, questionId));
   if (attemptId) await db.delete(schema.testAttempts).where(eq(schema.testAttempts.id, attemptId));
+  if (otherAttemptId) await db.delete(schema.testAttempts).where(eq(schema.testAttempts.id, otherAttemptId));
   if (ownerId) await db.delete(schema.users).where(eq(schema.users.id, ownerId));
   if (otherUserId) await db.delete(schema.users).where(eq(schema.users.id, otherUserId));
   const { pool } = await import("../server/db");
@@ -133,6 +143,12 @@ async function readQuestion() {
 async function readAttempt() {
   const [attempt] = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.id, attemptId));
   return attempt;
+}
+
+async function readSuiteAttempts() {
+  return db.select().from(schema.testAttempts)
+    .where(inArray(schema.testAttempts.userId, [ownerId, otherUserId]))
+    .orderBy(schema.testAttempts.id);
 }
 
 test("SEC-01: question and attempt edits and deletes enforce ownership and preserve protected fields", async () => {
@@ -258,17 +274,17 @@ test("SEC-01: owner can create an attempt with their test questions in the origi
 });
 
 test("SEC-01: attempt creation requires a session and leaves attempts unchanged", async () => {
-  const beforeAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
+  const beforeAttempts = await readSuiteAttempts();
   const response = await request("/api/attempts", {
     method: "POST", body: JSON.stringify({ testId: `sec01-${testSuffix}.json`, questionOrder: [ownerSecondQuestionId] }),
   });
   assert.equal(response.status, 401);
-  const afterAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
+  const afterAttempts = await readSuiteAttempts();
   assert.deepEqual(afterAttempts, beforeAttempts);
 });
 
 test("SEC-01: client cannot supply the persisted question count", async () => {
-  const beforeAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
+  const beforeAttempts = await readSuiteAttempts();
   const response = await request("/api/attempts", {
     method: "POST", body: JSON.stringify({
       testId: `sec01-${testSuffix}.json`, questionOrder: [ownerSecondQuestionId], totalQuestions: 999,
@@ -279,7 +295,7 @@ test("SEC-01: client cannot supply the persisted question count", async () => {
     creationAttemptIds.push(body.id);
   }
   assert.equal(response.status, 400);
-  const afterAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
+  const afterAttempts = await readSuiteAttempts();
   assert.deepEqual(afterAttempts, beforeAttempts);
 });
 
@@ -292,12 +308,16 @@ test("SEC-01: question and result creation reject client-supplied owners and per
     correctAnswer: "A",
     category: "Fixture de pruebas",
   };
-  const questionsBefore = await db.select().from(schema.questions).where(eq(schema.questions.testId, questionTestId));
+  const questionsBefore = await db.select().from(schema.questions)
+    .where(eq(schema.questions.testId, questionTestId)).orderBy(schema.questions.id);
   const spoofedQuestion = await request("/api/questions", {
     method: "POST", body: JSON.stringify({ ...questionPayload, userId: otherUserId }),
   }, ownerId);
   assert.equal(spoofedQuestion.status, 400);
-  assert.deepEqual(await db.select().from(schema.questions).where(eq(schema.questions.testId, questionTestId)), questionsBefore);
+  assert.deepEqual(
+    await db.select().from(schema.questions).where(eq(schema.questions.testId, questionTestId)).orderBy(schema.questions.id),
+    questionsBefore,
+  );
 
   const createdQuestionResponse = await request("/api/questions", {
     method: "POST", body: JSON.stringify(questionPayload),
@@ -324,12 +344,16 @@ test("SEC-01: question and result creation reject client-supplied owners and per
   assert.equal(persistedImport.userId, ownerId);
 
   const resultPayload = { testId: questionTestId, score: 80, correctCount: 4, totalQuestions: 5 };
-  const resultsBefore = await db.select().from(schema.results).where(eq(schema.results.testId, questionTestId));
+  const resultsBefore = await db.select().from(schema.results)
+    .where(eq(schema.results.testId, questionTestId)).orderBy(schema.results.id);
   const spoofedResult = await request("/api/results", {
     method: "POST", body: JSON.stringify({ ...resultPayload, userId: otherUserId }),
   }, ownerId);
   assert.equal(spoofedResult.status, 400);
-  assert.deepEqual(await db.select().from(schema.results).where(eq(schema.results.testId, questionTestId)), resultsBefore);
+  assert.deepEqual(
+    await db.select().from(schema.results).where(eq(schema.results.testId, questionTestId)).orderBy(schema.results.id),
+    resultsBefore,
+  );
 
   const createdResultResponse = await request("/api/results", {
     method: "POST", body: JSON.stringify(resultPayload),
@@ -354,15 +378,15 @@ for (const invalid of [
   { name: "empty question order", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [] }) },
 ]) {
   test(`SEC-01: storage rejects ${invalid.name} without inserting an attempt`, async () => {
-    const beforeAttempts = await db.select().from(schema.testAttempts);
+    const beforeAttempts = await readSuiteAttempts();
     const result = await storage.createAttempt({ ...invalid.input(), userId: ownerId });
     assert.equal(result, undefined);
-    const afterAttempts = await db.select().from(schema.testAttempts);
+    const afterAttempts = await readSuiteAttempts();
     assert.deepEqual(afterAttempts, beforeAttempts);
   });
 
   test(`SEC-01: attempt creation rejects ${invalid.name} without changing attempts`, async () => {
-    const beforeAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
+    const beforeAttempts = await readSuiteAttempts();
     const response = await request("/api/attempts", {
       method: "POST", body: JSON.stringify(invalid.input()),
     }, ownerId);
@@ -370,7 +394,7 @@ for (const invalid of [
       const body: { id: number } = await response.json();
       creationAttemptIds.push(body.id);
     }
-    const afterAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
+    const afterAttempts = await readSuiteAttempts();
     assert.equal(response.status, 400);
     assert.deepEqual(afterAttempts, beforeAttempts);
   });
