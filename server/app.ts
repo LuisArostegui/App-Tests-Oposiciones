@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { registerRoutes } from "./routes";
 import { passport } from "./auth";
 import { pool } from "./db";
-import { getSessionSecret, getTrustedProxyHops, isRequestLoggingEnabled } from "./config";
+import { getSessionSecret, getTrustedProxyHops, isRegistrationEnabled, isRequestLoggingEnabled } from "./config";
 import { apiErrorHandler, createRequestLogger } from "./http-middleware";
 import { createAuthRateLimiter, createSameOriginGuard } from "./security-middleware";
 
@@ -18,6 +18,7 @@ declare module "http" {
 export async function createApplication(environment: NodeJS.ProcessEnv = process.env) {
   const sessionSecret = getSessionSecret(environment);
   const trustProxyHops = getTrustedProxyHops(environment);
+  const registrationEnabled = isRegistrationEnabled(environment);
   const requestLoggingEnabled = isRequestLoggingEnabled(environment);
   const sameOriginGuard = createSameOriginGuard(environment.APP_URL);
 
@@ -57,7 +58,7 @@ export async function createApplication(environment: NodeJS.ProcessEnv = process
   app.use(passport.session());
   app.use(sameOriginGuard);
 
-  await registerRoutes(httpServer, app);
+  await registerRoutes(httpServer, app, registrationEnabled);
   app.use(apiErrorHandler);
 
   return { app, server: httpServer };

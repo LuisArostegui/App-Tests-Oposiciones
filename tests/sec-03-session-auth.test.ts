@@ -23,12 +23,14 @@ const baseEnvironment: NodeJS.ProcessEnv = {
   SESSION_SECRET: productionSecret,
   TRUST_PROXY_HOPS: "1",
   REQUEST_LOGGING_ENABLED: "false",
+  REGISTRATION_ENABLED: "true",
   APP_URL: "",
 };
 
 type RunningApplication = { app: import("express").Express; server: Server; baseUrl: string };
 const runningApplications: RunningApplication[] = [];
 const createdUsernames: string[] = [];
+const createdQuestionIds: number[] = [];
 const activeCookies: Array<{ running: RunningApplication; cookie: string }> = [];
 
 async function startApplication(environment: NodeJS.ProcessEnv): Promise<RunningApplication> {
@@ -96,6 +98,9 @@ after(async () => {
       await new Promise<void>((resolve, reject) => running.server.close((error) => error ? reject(error) : resolve()));
     }
   }
+  if (createdQuestionIds.length) {
+    await db.delete(schema.questions).where(inArray(schema.questions.id, createdQuestionIds));
+  }
   if (createdUsernames.length) {
     await db.delete(schema.users).where(inArray(schema.users.username, createdUsernames));
   }
@@ -103,7 +108,13 @@ after(async () => {
 });
 
 test("SEC-03: production rejects missing, default, short, and low-diversity session secrets", async () => {
-  for (const secret of ["", "default-secret-change-me", "short", "x".repeat(64)]) {
+  for (const secret of [
+    "",
+    "default-secret-change-me",
+    "opostest-development-session-secret-not-for-production",
+    "short",
+    "x".repeat(64),
+  ]) {
     await assert.rejects(
       createApplication({ ...baseEnvironment, SESSION_SECRET: secret }),
       /SESSION_SECRET/,
@@ -113,6 +124,39 @@ test("SEC-03: production rejects missing, default, short, and low-diversity sess
     createApplication({ ...baseEnvironment, TRUST_PROXY_HOPS: "forwarded" }),
     /TRUST_PROXY_HOPS/,
   );
+  await assert.rejects(
+    createApplication({ ...baseEnvironment, REGISTRATION_ENABLED: "sometimes" }),
+    /REGISTRATION_ENABLED/,
+  );
+});
+
+test("SEC-03: registration defaults on in development and off in production without inserting disabled users", async () => {
+  const productionDefault = await startApplication({
+    ...baseEnvironment,
+    REGISTRATION_ENABLED: undefined,
+  });
+  const disabledUsername = `sec03-registration-disabled-${suffix}`;
+  const disabledHeaders = requestHeaders(productionDefault);
+  disabledHeaders.set("content-type", "application/json");
+  const disabledResponse = await fetch(`${productionDefault.baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: disabledHeaders,
+    body: JSON.stringify({ username: disabledUsername, password: "sec03-test-password" }),
+  });
+  assert.equal(disabledResponse.status, 403);
+  assert.deepEqual(
+    await db.select().from(schema.users).where(eq(schema.users.username, disabledUsername)),
+    [],
+  );
+
+  const developmentDefault = await startApplication({
+    ...baseEnvironment,
+    NODE_ENV: "development",
+    SESSION_SECRET: "stable-development-only-session-secret",
+    REGISTRATION_ENABLED: undefined,
+  });
+  const enabled = await register(developmentDefault, `sec03-registration-development-${suffix}`);
+  assert.equal(enabled.response.status, 201);
 });
 
 test("SEC-03: production app sets secure HttpOnly SameSite=Lax cookies and rotates authenticated sessions", async () => {
@@ -218,6 +262,83 @@ test("SEC-03: sessions are isolated and logout requires a same-origin request", 
   assert.match(clearedCookie, /; Path=\//i);
   assert.equal((await authMe(running, first.cookie)).status, 401);
   assert.equal((await authMe(running, second.cookie)).status, 200);
+});
+
+test("SEC-03: APP_URL pins the accepted CSRF origin", async () => {
+  const running = await startApplication({
+    ...baseEnvironment,
+    APP_URL: "https://configured-opostest.example",
+  });
+  const headers = requestHeaders(running);
+  headers.set("content-type", "application/json");
+  headers.set("origin", "https://attacker.example");
+  const rejected = await fetch(`${running.baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ username: "missing-user", password: "invalid-password" }),
+  });
+  assert.equal(rejected.status, 403);
+
+  headers.set("origin", "https://configured-opostest.example");
+  const accepted = await fetch(`${running.baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ username: "missing-user", password: "invalid-password" }),
+  });
+  assert.equal(accepted.status, 401, "the configured origin passes CSRF validation and reaches authentication");
+});
+
+test("SEC-03: Referer is accepted as the same-origin CSRF source when Origin is absent", async () => {
+  const running = await startApplication({ ...baseEnvironment, APP_URL: "" });
+  const headers = requestHeaders(running);
+  headers.delete("origin");
+  headers.set("referer", `${originFor(running)}/login`);
+  headers.set("content-type", "application/json");
+  const accepted = await fetch(`${running.baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ username: "missing-user", password: "invalid-password" }),
+  });
+  assert.equal(accepted.status, 401, "a same-origin Referer passes CSRF validation");
+});
+
+test("SEC-03: CSRF protects authenticated question creation and allows a same-origin write", async () => {
+  const running = runningApplications[0]!;
+  const authenticated = await register(running, `sec03-csrf-writer-${suffix}`);
+  assert.equal(authenticated.response.status, 201);
+
+  const testId = `sec03-csrf-${suffix}.json`;
+  const question = {
+    testId,
+    questionText: "Pregunta de regresión CSRF",
+    answers: { A: "Respuesta A", B: "Respuesta B" },
+    correctAnswer: "A",
+    category: "SEC-03 test",
+  };
+  const forgedHeaders = requestHeaders(running, authenticated.cookie);
+  forgedHeaders.set("origin", "https://attacker.example");
+  forgedHeaders.set("content-type", "application/json");
+  const forgedWrite = await fetch(`${running.baseUrl}/api/questions`, {
+    method: "POST",
+    headers: forgedHeaders,
+    body: JSON.stringify(question),
+  });
+  assert.equal(forgedWrite.status, 403);
+  assert.deepEqual(
+    await db.select().from(schema.questions).where(eq(schema.questions.testId, testId)),
+    [],
+  );
+
+  const sameOriginHeaders = requestHeaders(running, authenticated.cookie);
+  sameOriginHeaders.set("content-type", "application/json");
+  const allowedWrite = await fetch(`${running.baseUrl}/api/questions`, {
+    method: "POST",
+    headers: sameOriginHeaders,
+    body: JSON.stringify(question),
+  });
+  assert.equal(allowedWrite.status, 201);
+  const createdQuestion = await allowedWrite.json() as { id: number };
+  createdQuestionIds.push(createdQuestion.id);
 });
 
 test("SEC-03: development request logging defaults on and can be disabled for a private instance", async () => {

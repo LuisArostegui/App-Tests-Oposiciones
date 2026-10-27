@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { InsertQuestion, registerSchema, loginSchema } from "@shared/schema";
-import { config } from "./config";
+import { config, isRegistrationEnabled } from "./config";
 import { passport } from "./auth";
 import { asyncHandler } from "./http-middleware";
 import { parsePositiveId } from "./validation";
@@ -23,7 +23,8 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 
 export async function registerRoutes(
   httpServer: Server,
-  app: Express
+  app: Express,
+  registrationEnabled = isRegistrationEnabled(),
 ): Promise<Server> {
   const registerRateLimit = createAuthRateLimiter(5, 60 * 60 * 1000);
   const loginRateLimit = createAuthRateLimiter(10, 15 * 60 * 1000);
@@ -34,7 +35,12 @@ export async function registerRoutes(
   });
 
   // === Auth Routes ===
-  app.post("/api/auth/register", registerRateLimit, asyncHandler(async (req, res, next) => {
+  app.post("/api/auth/register", (_req, res, next) => {
+    if (!registrationEnabled) {
+      return res.status(403).json({ message: "El registro no está disponible" });
+    }
+    return next();
+  }, registerRateLimit, asyncHandler(async (req, res, next) => {
     try {
       const { username, password } = registerSchema.parse(req.body);
       

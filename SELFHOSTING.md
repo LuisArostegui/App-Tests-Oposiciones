@@ -132,11 +132,15 @@ TRUST_PROXY_HOPS=1
 # Para una instancia privada puedes desactivar los logs de solicitudes API.
 REQUEST_LOGGING_ENABLED=false
 
+# El registro de nuevas cuentas está deshabilitado en producción por defecto.
+# Cámbialo a true solo mientras quieras permitir altas y reinicia el servidor.
+REGISTRATION_ENABLED=false
+
 # Nombre de tu aplicación
 APP_NAME=OposTest Pro
 ```
 
-> **Importante**: El `SESSION_SECRET` es obligatorio en producción y se usa para firmar las sesiones de usuario. Genera una clave segura con `openssl rand -base64 48`, guárdala solo en `.env` y nunca la compartas. La aplicación rechaza valores ausentes, de ejemplo o débiles.
+> **Importante**: El `SESSION_SECRET` es obligatorio en producción y se usa para firmar las sesiones de usuario. Genera una clave segura con `openssl rand -base64 48`, guárdala solo en `.env` y nunca la compartas. La aplicación rechaza valores ausentes, de ejemplo, débiles y el secreto fijo de desarrollo. `REGISTRATION_ENABLED` vale `false` por defecto en producción; configúralo explícitamente a `true` y reinicia el servidor para permitir nuevas cuentas.
 
 Guarda el archivo: `Ctrl + X`, luego `Y`, luego `Enter`.
 

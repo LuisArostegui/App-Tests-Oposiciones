@@ -21,7 +21,7 @@ export function getSessionSecret(environment: NodeJS.ProcessEnv = process.env): 
     return configuredSecret || developmentSessionSecret;
   }
 
-  if (!configuredSecret || configuredSecret.length < 32
+  if (!configuredSecret || configuredSecret === developmentSessionSecret || configuredSecret.length < 32
     || new Set(configuredSecret).size < 16 || placeholderSecretPattern.test(configuredSecret)) {
     throw new Error("SESSION_SECRET must be set to a strong, unique value of at least 32 characters in production");
   }
@@ -47,6 +47,14 @@ export function isRequestLoggingEnabled(environment: NodeJS.ProcessEnv = process
   if (value.toLowerCase() === "true") return true;
   if (value.toLowerCase() === "false") return false;
   throw new Error("REQUEST_LOGGING_ENABLED must be true or false");
+}
+
+export function isRegistrationEnabled(environment: NodeJS.ProcessEnv = process.env): boolean {
+  const value = environment.REGISTRATION_ENABLED?.trim();
+  if (value === undefined || value === "") return environment.NODE_ENV !== "production";
+  if (value.toLowerCase() === "true") return true;
+  if (value.toLowerCase() === "false") return false;
+  throw new Error("REGISTRATION_ENABLED must be true or false");
 }
 
 export type AppConfig = typeof config.app;
