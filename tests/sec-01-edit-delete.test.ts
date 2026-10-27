@@ -71,9 +71,9 @@ before(async () => {
   const attempt = await storage.createAttempt({
     testId: `sec01-${testSuffix}.json`,
     questionOrder: [questionId],
-    totalQuestions: 1,
     userId: ownerId,
   });
+  assert.ok(attempt);
   attemptId = attempt.id;
 
   const app = express();
@@ -283,6 +283,14 @@ for (const invalid of [
   { name: "fractional question ID", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [1.5] }) },
   { name: "empty question order", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [] }) },
 ]) {
+  test(`SEC-01: storage rejects ${invalid.name} without inserting an attempt`, async () => {
+    const beforeAttempts = await db.select().from(schema.testAttempts);
+    const result = await storage.createAttempt({ ...invalid.input(), userId: ownerId });
+    assert.equal(result, undefined);
+    const afterAttempts = await db.select().from(schema.testAttempts);
+    assert.deepEqual(afterAttempts, beforeAttempts);
+  });
+
   test(`SEC-01: attempt creation rejects ${invalid.name} without changing attempts`, async () => {
     const beforeAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
     const response = await request("/api/attempts", {
