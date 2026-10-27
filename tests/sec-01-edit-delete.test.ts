@@ -256,6 +256,16 @@ test("SEC-01: owner can create an attempt with their test questions in the origi
   assert.equal(attempt.totalQuestions, 2);
 });
 
+test("SEC-01: attempt creation requires a session and leaves attempts unchanged", async () => {
+  const beforeAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
+  const response = await request("/api/attempts", {
+    method: "POST", body: JSON.stringify({ testId: `sec01-${testSuffix}.json`, questionOrder: [ownerSecondQuestionId] }),
+  });
+  assert.equal(response.status, 401);
+  const afterAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
+  assert.deepEqual(afterAttempts, beforeAttempts);
+});
+
 test("SEC-01: client cannot supply the persisted question count", async () => {
   const beforeAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
   const response = await request("/api/attempts", {
