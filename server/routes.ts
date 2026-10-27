@@ -235,6 +235,9 @@ export async function registerRoutes(
     try {
       const input = api.attempts.create.input.parse(req.body);
       const attempt = await storage.createAttempt({ ...input, userId: req.user!.id });
+      if (!attempt) {
+        return res.status(400).json({ message: "Validation error" });
+      }
       res.status(201).json(attempt);
     } catch (err) {
       console.error("Create attempt error:", err);

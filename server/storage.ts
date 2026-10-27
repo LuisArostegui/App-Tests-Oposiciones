@@ -14,7 +14,7 @@ import {
   type InsertUser,
   type UpdateAttempt,
 } from "@shared/schema";
-import { eq, desc, sql, and } from "drizzle-orm";
+import { eq, desc, sql, and, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // Users
@@ -40,7 +40,7 @@ export interface IStorage {
   // Attempts
   getAttempts(userId?: number): Promise<TestAttempt[]>;
   getAttempt(id: number, userId: number): Promise<TestAttempt | undefined>;
-  createAttempt(attempt: { testId: string; questionOrder: number[]; totalQuestions: number; userId?: number }): Promise<TestAttempt>;
+  createAttempt(attempt: { testId: string; questionOrder: number[]; userId: number }): Promise<TestAttempt | undefined>;
   updateAttempt(id: number, userId: number, update: UpdateAttempt): Promise<TestAttempt | undefined>;
   deleteAttempt(id: number, userId: number): Promise<boolean>;
 }
@@ -188,17 +188,31 @@ export class DatabaseStorage implements IStorage {
     return attempt;
   }
 
-  async createAttempt(attempt: { testId: string; questionOrder: number[]; totalQuestions: number; userId?: number }): Promise<TestAttempt> {
-    const [created] = await db.insert(testAttempts).values({
-      testId: attempt.testId,
-      questionOrder: attempt.questionOrder,
-      totalQuestions: attempt.totalQuestions,
-      status: "in_progress",
-      currentIndex: 0,
-      answers: {},
-      userId: attempt.userId,
-    }).returning();
-    return created;
+  async createAttempt(attempt: { testId: string; questionOrder: number[]; userId: number }): Promise<TestAttempt | undefined> {
+    const { questionOrder, testId, userId } = attempt;
+    if (questionOrder.length === 0 || questionOrder.some(id => !Number.isInteger(id) || id <= 0) || new Set(questionOrder).size !== questionOrder.length) {
+      return undefined;
+    }
+
+    return db.transaction(async (tx) => {
+      const verified = await tx.select({ id: questions.id }).from(questions).where(and(
+        eq(questions.testId, testId),
+        eq(questions.userId, userId),
+        inArray(questions.id, questionOrder),
+      )).for("share");
+      if (verified.length !== questionOrder.length) return undefined;
+
+      const [created] = await tx.insert(testAttempts).values({
+        testId,
+        questionOrder,
+        totalQuestions: verified.length,
+        status: "in_progress",
+        currentIndex: 0,
+        answers: {},
+        userId,
+      }).returning();
+      return created;
+    });
   }
 
   async updateAttempt(id: number, userId: number, update: UpdateAttempt): Promise<TestAttempt | undefined> {

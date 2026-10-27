@@ -135,9 +135,8 @@ export const api = {
       path: '/api/attempts',
       input: z.object({
         testId: z.string(),
-        questionOrder: z.array(z.number()),
-        totalQuestions: z.number(),
-      }),
+        questionOrder: z.array(z.number().int().positive()).nonempty(),
+      }).strict(),
       responses: {
         201: z.custom<typeof testAttempts.$inferSelect>(),
       },
