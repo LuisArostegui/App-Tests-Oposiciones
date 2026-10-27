@@ -4,10 +4,11 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { InsertQuestion, registerSchema, loginSchema } from "@shared/schema";
-import { config } from "./config";
+import { config, isRegistrationEnabled } from "./config";
 import { passport } from "./auth";
 import { asyncHandler } from "./http-middleware";
 import { parsePositiveId } from "./validation";
+import { createAuthRateLimiter } from "./security-middleware";
 import bcrypt from "bcryptjs";
 
 import fs from "fs";
@@ -22,8 +23,11 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 
 export async function registerRoutes(
   httpServer: Server,
-  app: Express
+  app: Express,
+  registrationEnabled = isRegistrationEnabled(),
 ): Promise<Server> {
+  const registerRateLimit = createAuthRateLimiter(5, 60 * 60 * 1000);
+  const loginRateLimit = createAuthRateLimiter(10, 15 * 60 * 1000);
 
   // === App Config (for frontend) ===
   app.get("/api/config", (req, res) => {
@@ -31,7 +35,12 @@ export async function registerRoutes(
   });
 
   // === Auth Routes ===
-  app.post("/api/auth/register", asyncHandler(async (req, res, next) => {
+  app.post("/api/auth/register", (_req, res, next) => {
+    if (!registrationEnabled) {
+      return res.status(403).json({ message: "El registro no está disponible" });
+    }
+    return next();
+  }, registerRateLimit, asyncHandler(async (req, res, next) => {
     try {
       const { username, password } = registerSchema.parse(req.body);
       
@@ -53,7 +62,7 @@ export async function registerRoutes(
     }
   }));
 
-  app.post("/api/auth/login", (req, res, next) => {
+  app.post("/api/auth/login", loginRateLimit, (req, res, next) => {
     try {
       loginSchema.parse(req.body);
     } catch (err) {
@@ -68,7 +77,7 @@ export async function registerRoutes(
         return next(err);
       }
       if (!user) {
-        return res.status(401).json({ message: info?.message || "Credenciales incorrectas" });
+        return res.status(401).json({ message: "Credenciales incorrectas" });
       }
       req.login(user, (loginErr) => {
         if (loginErr) {
@@ -79,16 +88,21 @@ export async function registerRoutes(
     })(req, res, next);
   });
 
-  app.post("/api/auth/logout", (req, res) => {
+  app.post("/api/auth/logout", requireAuth, (req, res, next) => {
     req.logout((err) => {
       if (err) {
-        return res.status(500).json({ message: "Error al cerrar sesión" });
+        return next(err);
       }
       req.session.destroy((destroyErr) => {
         if (destroyErr) {
-          return res.status(500).json({ message: "Error al cerrar sesión" });
+          return next(destroyErr);
         }
-        res.clearCookie("connect.sid");
+        res.clearCookie("connect.sid", {
+          httpOnly: true,
+          secure: req.app.locals.secureSessionCookie === true,
+          sameSite: "lax",
+          path: "/",
+        });
         res.json({ message: "Sesión cerrada" });
       });
     });
