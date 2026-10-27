@@ -284,8 +284,10 @@ npm run db:push
 | DELETE | `/api/questions/:id` | Elimina una pregunta |
 | GET | `/api/results` | Lista el historial |
 | POST | `/api/results` | Guarda un resultado |
-| GET | `/api/remote/list?url=...` | Lista archivos remotos |
-| GET | `/api/remote/fetch?url=...&filename=...` | Descarga archivo remoto |
+| GET | `/api/remote/list?url=...` | Desactivado: responde 503 a usuarios autenticados |
+| GET | `/api/remote/fetch?url=...&filename=...` | Desactivado: responde 503 a usuarios autenticados |
+
+La importación remota permanece desactivada en esta versión y no existe una opción de entorno para reactivarla. No se realizan conexiones salientes desde estas rutas. Reactivarla requiere primero una allowlist administrada, validación de destino y ruta, control de redirecciones y DNS, y límites de tiempo y tamaño. La importación local de archivos JSON continúa disponible.
 
 ---
 

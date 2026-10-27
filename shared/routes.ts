@@ -165,8 +165,8 @@ export const api = {
       path: '/api/remote/list',
       input: z.object({ url: z.string() }).optional(),
       responses: {
-        200: z.array(z.string()),
-        400: errorSchemas.validation,
+        401: errorSchemas.validation,
+        503: errorSchemas.internal,
       },
     },
     fetch: {
@@ -174,8 +174,8 @@ export const api = {
       path: '/api/remote/fetch',
       input: z.object({ url: z.string(), filename: z.string() }).optional(),
       responses: {
-        200: z.array(z.any()),
-        400: errorSchemas.validation,
+        401: errorSchemas.validation,
+        503: errorSchemas.internal,
       },
     },
   },
