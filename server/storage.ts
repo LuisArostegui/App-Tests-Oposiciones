@@ -23,22 +23,22 @@ export interface IStorage {
   getUserById(id: number): Promise<User | undefined>;
 
   // Test/Questions
-  getTests(userId?: number): Promise<{ id: string; count: number; category: string | null }[]>;
-  getQuestionsByTestId(testId: string, userId?: number): Promise<Question[]>;
+  getTests(userId: number): Promise<{ id: string; count: number; category: string | null }[]>;
+  getQuestionsByTestId(testId: string, userId: number): Promise<Question[]>;
   createQuestions(questionsList: InsertQuestion[]): Promise<void>;
   createQuestion(question: InsertQuestion): Promise<Question>;
   updateQuestion(id: number, userId: number, question: UpdateQuestion): Promise<Question | undefined>;
   deleteQuestion(id: number, userId: number): Promise<boolean>;
-  deleteTest(testId: string, userId?: number): Promise<void>;
-  renameTest(oldTestId: string, newTestId: string, userId?: number): Promise<void>;
+  deleteTest(testId: string, userId: number): Promise<void>;
+  renameTest(oldTestId: string, newTestId: string, userId: number): Promise<void>;
   
   // Results
-  getResults(userId?: number): Promise<Result[]>;
+  getResults(userId: number): Promise<Result[]>;
   createResult(result: InsertResult): Promise<Result>;
   deleteResult(id: number): Promise<void>;
 
   // Attempts
-  getAttempts(userId?: number): Promise<TestAttempt[]>;
+  getAttempts(userId: number): Promise<TestAttempt[]>;
   getAttempt(id: number, userId: number): Promise<TestAttempt | undefined>;
   createAttempt(attempt: { testId: string; questionOrder: number[]; userId: number }): Promise<TestAttempt | undefined>;
   updateAttempt(id: number, userId: number, update: UpdateAttempt): Promise<TestAttempt | undefined>;
@@ -63,20 +63,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Tests/Questions
-  async getTests(userId?: number): Promise<{ id: string; count: number; category: string | null }[]> {
-    if (userId) {
-      const rows = await db
-        .select({
-          id: questions.testId,
-          count: sql<number>`count(*)`.mapWith(Number),
-          category: sql<string>`MAX(${questions.category})`
-        })
-        .from(questions)
-        .where(eq(questions.userId, userId))
-        .groupBy(questions.testId);
-      return rows;
-    }
-    
+  async getTests(userId: number): Promise<{ id: string; count: number; category: string | null }[]> {
     const rows = await db
       .select({
         id: questions.testId,
@@ -84,17 +71,15 @@ export class DatabaseStorage implements IStorage {
         category: sql<string>`MAX(${questions.category})`
       })
       .from(questions)
+      .where(eq(questions.userId, userId))
       .groupBy(questions.testId);
     return rows;
   }
 
-  async getQuestionsByTestId(testId: string, userId?: number): Promise<Question[]> {
-    if (userId) {
-      return await db.select().from(questions).where(
-        and(eq(questions.testId, testId), eq(questions.userId, userId))
-      );
-    }
-    return await db.select().from(questions).where(eq(questions.testId, testId));
+  async getQuestionsByTestId(testId: string, userId: number): Promise<Question[]> {
+    return await db.select().from(questions).where(
+      and(eq(questions.testId, testId), eq(questions.userId, userId))
+    );
   }
 
   async createQuestions(questionsList: InsertQuestion[]): Promise<void> {
@@ -124,36 +109,23 @@ export class DatabaseStorage implements IStorage {
     return deleted.length > 0;
   }
 
-  async deleteTest(testId: string, userId?: number): Promise<void> {
-    if (userId) {
-      await db.delete(questions).where(
-        and(eq(questions.testId, testId), eq(questions.userId, userId))
-      );
-    } else {
-      await db.delete(questions).where(eq(questions.testId, testId));
-    }
+  async deleteTest(testId: string, userId: number): Promise<void> {
+    await db.delete(questions).where(
+      and(eq(questions.testId, testId), eq(questions.userId, userId))
+    );
   }
 
-  async renameTest(oldTestId: string, newTestId: string, userId?: number): Promise<void> {
-    if (userId) {
-      await db.update(questions)
-        .set({ testId: newTestId })
-        .where(and(eq(questions.testId, oldTestId), eq(questions.userId, userId)));
-    } else {
-      await db.update(questions)
-        .set({ testId: newTestId })
-        .where(eq(questions.testId, oldTestId));
-    }
+  async renameTest(oldTestId: string, newTestId: string, userId: number): Promise<void> {
+    await db.update(questions)
+      .set({ testId: newTestId })
+      .where(and(eq(questions.testId, oldTestId), eq(questions.userId, userId)));
   }
 
   // Results
-  async getResults(userId?: number): Promise<Result[]> {
-    if (userId) {
-      return await db.select().from(results)
-        .where(eq(results.userId, userId))
-        .orderBy(desc(results.completedAt));
-    }
-    return await db.select().from(results).orderBy(desc(results.completedAt));
+  async getResults(userId: number): Promise<Result[]> {
+    return await db.select().from(results)
+      .where(eq(results.userId, userId))
+      .orderBy(desc(results.completedAt));
   }
 
   async createResult(result: InsertResult): Promise<Result> {
@@ -166,13 +138,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Attempts
-  async getAttempts(userId?: number): Promise<TestAttempt[]> {
-    if (userId) {
-      return await db.select().from(testAttempts)
-        .where(eq(testAttempts.userId, userId))
-        .orderBy(desc(testAttempts.startedAt));
-    }
-    return await db.select().from(testAttempts).orderBy(desc(testAttempts.startedAt));
+  async getAttempts(userId: number): Promise<TestAttempt[]> {
+    return await db.select().from(testAttempts)
+      .where(eq(testAttempts.userId, userId))
+      .orderBy(desc(testAttempts.startedAt));
   }
 
   async getAttempt(id: number, userId: number): Promise<TestAttempt | undefined> {
