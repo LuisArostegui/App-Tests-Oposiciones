@@ -1,20 +1,26 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { ZodError } from "zod";
 
-export const requestLogger: RequestHandler = (req, res, next) => {
-  const startedAt = Date.now();
+export function createRequestLogger(enabled = true): RequestHandler {
+  return (req, res, next) => {
+    if (!enabled) return next();
 
-  res.on("finish", () => {
-    if (req.path.startsWith("/api")) {
-      const route = typeof req.route?.path === "string" && req.route.path.startsWith("/api")
-        ? req.route.path
-        : "/api/*";
-      console.log(`${req.method} ${route} ${res.statusCode} in ${Date.now() - startedAt}ms`);
-    }
-  });
+    const startedAt = Date.now();
 
-  next();
-};
+    res.on("finish", () => {
+      if (req.path.startsWith("/api")) {
+        const route = typeof req.route?.path === "string" && req.route.path.startsWith("/api")
+          ? req.route.path
+          : "/api/*";
+        console.log(`${req.method} ${route} ${res.statusCode} in ${Date.now() - startedAt}ms`);
+      }
+    });
+
+    next();
+  };
+}
+
+export const requestLogger = createRequestLogger();
 
 export function asyncHandler(handler: RequestHandler): RequestHandler {
   return (req, res, next) => {

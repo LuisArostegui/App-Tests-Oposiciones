@@ -148,8 +148,10 @@ APP_NAME=OposTest Pro
 APP_DESCRIPTION=Preparación de oposiciones
 WELCOME_MESSAGE=Preparando tu entorno de estudio...
 
-# Seguridad (genera con: openssl rand -base64 32)
-SESSION_SECRET=tu_clave_secreta_aqui
+# Seguridad (genera con: openssl rand -base64 48)
+SESSION_SECRET=
+TRUST_PROXY_HOPS=0
+REQUEST_LOGGING_ENABLED=true
 ```
 
 ### Variables de Entorno
@@ -161,7 +163,13 @@ SESSION_SECRET=tu_clave_secreta_aqui
 | `APP_NAME` | Nombre de la aplicación | `OposTest Pro` |
 | `APP_DESCRIPTION` | Descripción corta | `Preparación de oposiciones` |
 | `WELCOME_MESSAGE` | Mensaje de bienvenida | `Preparando tu entorno de estudio...` |
-| `SESSION_SECRET` | Clave para encriptar sesiones | **Requerido** |
+| `SESSION_SECRET` | Clave para firmar sesiones; en producción debe ser aleatoria, privada y de al menos 32 caracteres | Generada por el administrador |
+| `TRUST_PROXY_HOPS` | Número de saltos de proxy inverso confiables; `0` ignora cabeceras de proxy | `0` |
+| `REQUEST_LOGGING_ENABLED` | Activa logs de método, ruta, estado y duración. No se guardan cuerpos ni query strings | `true` |
+
+En producción el servidor rechaza una clave de sesión ausente, de ejemplo o débil. La cookie de sesión es `HttpOnly`, `Secure` bajo HTTPS, `SameSite=Lax` y caduca tras 30 días. Para Nginx, configura `TRUST_PROXY_HOPS=1` solo si todo el tráfico pasa por ese proxy controlado; el valor predeterminado es `0`. Puedes configurar `REQUEST_LOGGING_ENABLED=false` en una instancia privada.
+
+Las solicitudes API que modifican datos y las operaciones de login/registro deben proceder del mismo origen. El cliente servido por la aplicación usa rutas relativas y envía solicitudes same-origin, por lo que no necesita un token CSRF adicional.
 
 ---
 

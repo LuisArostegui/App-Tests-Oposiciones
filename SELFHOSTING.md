@@ -122,14 +122,21 @@ DATABASE_URL=postgresql://opostest:tu_contraseña_segura@localhost:5432/opostest
 PORT=5000
 
 # IMPORTANTE: Genera una clave secreta segura para las sesiones de usuario
-# Ejecuta: openssl rand -base64 32
-SESSION_SECRET=tu_clave_secreta_generada
+# Ejecuta: openssl rand -base64 48 y guarda el resultado solo en .env
+SESSION_SECRET=
+
+# El ejemplo de Nginx de esta guía tiene un salto de proxy controlado.
+# Mantén 0 si expones directamente la aplicación o cambia solo tras limitar el acceso al proxy.
+TRUST_PROXY_HOPS=1
+
+# Para una instancia privada puedes desactivar los logs de solicitudes API.
+REQUEST_LOGGING_ENABLED=false
 
 # Nombre de tu aplicación
 APP_NAME=OposTest Pro
 ```
 
-> **Importante**: El `SESSION_SECRET` es obligatorio y se usa para encriptar las sesiones de usuario. Genera una clave segura con `openssl rand -base64 32` y nunca la compartas.
+> **Importante**: El `SESSION_SECRET` es obligatorio en producción y se usa para firmar las sesiones de usuario. Genera una clave segura con `openssl rand -base64 48`, guárdala solo en `.env` y nunca la compartas. La aplicación rechaza valores ausentes, de ejemplo o débiles.
 
 Guarda el archivo: `Ctrl + X`, luego `Y`, luego `Enter`.
 
@@ -264,6 +271,8 @@ sudo systemctl status opostest
 ## Paso 12: Configurar Nginx (Proxy Inverso) - Opcional pero Recomendado
 
 Nginx permite usar el puerto 80/443 y añadir SSL.
+
+Si esta es la única capa de proxy inverso y el puerto de la aplicación no está disponible desde Internet, configura `TRUST_PROXY_HOPS=1`. Para acceso directo usa `TRUST_PROXY_HOPS=0`. La aplicación no confía en cabeceras de proxy por defecto. En producción las cookies de sesión requieren HTTPS.
 
 ```bash
 # Instalar Nginx

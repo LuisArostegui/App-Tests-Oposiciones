@@ -1,0 +1,290 @@
+import assert from "node:assert/strict";
+import { after, before, test } from "node:test";
+import { eq, inArray } from "drizzle-orm";
+import type { Server } from "node:http";
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+if (!testDatabaseUrl || testDatabaseUrl === process.env.DATABASE_URL) {
+  throw new Error("TEST_DATABASE_URL must point to an isolated test database");
+}
+process.env.DATABASE_URL = testDatabaseUrl;
+
+const [{ createApplication }, { db, pool }, schema] = await Promise.all([
+  import("../server/app"),
+  import("../server/db"),
+  import("../shared/schema"),
+]);
+
+const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const productionSecret = "Sec03-Test-Only-0123456789-ABCDEF!";
+const baseEnvironment: NodeJS.ProcessEnv = {
+  ...process.env,
+  NODE_ENV: "production",
+  SESSION_SECRET: productionSecret,
+  TRUST_PROXY_HOPS: "1",
+  REQUEST_LOGGING_ENABLED: "false",
+  APP_URL: "",
+};
+
+type RunningApplication = { app: import("express").Express; server: Server; baseUrl: string };
+const runningApplications: RunningApplication[] = [];
+const createdUsernames: string[] = [];
+const activeCookies: Array<{ running: RunningApplication; cookie: string }> = [];
+
+async function startApplication(environment: NodeJS.ProcessEnv): Promise<RunningApplication> {
+  const { app, server } = await createApplication(environment);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const running = { app, server, baseUrl: `http://127.0.0.1:${address.port}` };
+  runningApplications.push(running);
+  return running;
+}
+
+function originFor(running: RunningApplication): string {
+  return running.baseUrl.replace("http://", "https://");
+}
+
+function requestHeaders(running: RunningApplication, cookie?: string): Headers {
+  const headers = new Headers({
+    origin: originFor(running),
+    "x-forwarded-proto": "https",
+  });
+  if (cookie) headers.set("cookie", cookie);
+  return headers;
+}
+
+function getCookie(running: RunningApplication, response: Response): string {
+  const header = response.headers.get("set-cookie");
+  assert.ok(header, "expected a session cookie");
+  const cookie = header.split(";", 1)[0];
+  activeCookies.push({ running, cookie });
+  return cookie;
+}
+
+async function register(running: RunningApplication, username: string): Promise<{ response: Response; cookie: string }> {
+  createdUsernames.push(username);
+  const headers = requestHeaders(running);
+  headers.set("content-type", "application/json");
+  const response = await fetch(`${running.baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ username, password: "sec03-test-password" }),
+  });
+  return { response, cookie: response.ok ? getCookie(running, response) : "" };
+}
+
+async function authMe(running: RunningApplication, cookie: string): Promise<Response> {
+  return fetch(`${running.baseUrl}/api/auth/me`, { headers: requestHeaders(running, cookie) });
+}
+
+async function logout(running: RunningApplication, cookie: string, origin = originFor(running)): Promise<Response> {
+  const headers = requestHeaders(running, cookie);
+  headers.set("origin", origin);
+  headers.set("content-type", "application/json");
+  return fetch(`${running.baseUrl}/api/auth/logout`, { method: "POST", headers, body: "{}" });
+}
+
+before(async () => {
+  await startApplication(baseEnvironment);
+});
+
+after(async () => {
+  for (const { running, cookie } of activeCookies) await logout(running, cookie).catch(() => undefined);
+  for (const running of runningApplications) {
+    if (running.server.listening) {
+      await new Promise<void>((resolve, reject) => running.server.close((error) => error ? reject(error) : resolve()));
+    }
+  }
+  if (createdUsernames.length) {
+    await db.delete(schema.users).where(inArray(schema.users.username, createdUsernames));
+  }
+  await pool.end();
+});
+
+test("SEC-03: production rejects missing, default, short, and low-diversity session secrets", async () => {
+  for (const secret of ["", "default-secret-change-me", "short", "x".repeat(64)]) {
+    await assert.rejects(
+      createApplication({ ...baseEnvironment, SESSION_SECRET: secret }),
+      /SESSION_SECRET/,
+    );
+  }
+  await assert.rejects(
+    createApplication({ ...baseEnvironment, TRUST_PROXY_HOPS: "forwarded" }),
+    /TRUST_PROXY_HOPS/,
+  );
+});
+
+test("SEC-03: production app sets secure HttpOnly SameSite=Lax cookies and rotates authenticated sessions", async () => {
+  const running = runningApplications[0]!;
+  assert.equal(running.app.get("trust proxy"), 1);
+
+  const username = `sec03-cookie-${suffix}`;
+  const created = await register(running, username);
+  assert.equal(created.response.status, 201);
+  const cookie = created.cookie;
+  const createdUser = await created.response.json() as { id: number; username: string };
+  const cookieHeader = created.response.headers.get("set-cookie") ?? "";
+  assert.match(cookieHeader, /; HttpOnly/i);
+  assert.match(cookieHeader, /; Secure/i);
+  assert.match(cookieHeader, /; SameSite=Lax/i);
+  const expires = cookieHeader.match(/; Expires=([^;]+)/i)?.[1];
+  assert.ok(expires);
+  const remainingCookieLifetime = Date.parse(expires) - Date.now();
+  assert.ok(remainingCookieLifetime > 29 * 24 * 60 * 60 * 1000);
+  assert.ok(remainingCookieLifetime <= 30 * 24 * 60 * 60 * 1000 + 60_000);
+
+  const beforeLogin = await authMe(running, cookie);
+  const beforeLoginUser = await beforeLogin.json();
+  assert.deepEqual(beforeLoginUser, createdUser);
+
+  const loginHeaders = requestHeaders(running, cookie);
+  loginHeaders.set("content-type", "application/json");
+  const login = await fetch(`${running.baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: loginHeaders,
+    body: JSON.stringify({ username, password: "sec03-test-password" }),
+  });
+  assert.equal(login.status, 200);
+  const rotatedCookie = getCookie(running, login);
+  assert.notEqual(rotatedCookie, cookie, "successful authentication must rotate the session ID");
+  assert.deepEqual(await (await authMe(running, rotatedCookie)).json(), beforeLoginUser);
+
+  const restarted = await startApplication({ ...baseEnvironment });
+  assert.equal((await authMe(restarted, rotatedCookie)).status, 200,
+    "a second app using the configured secret must read the existing session");
+});
+
+test("SEC-03: sessions are isolated and logout requires a same-origin request", async () => {
+  const running = runningApplications[0]!;
+
+  const rejectedRegisterHeaders = requestHeaders(running);
+  rejectedRegisterHeaders.set("origin", "https://attacker.example");
+  rejectedRegisterHeaders.set("content-type", "application/json");
+  const crossOriginRegister = await fetch(`${running.baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: rejectedRegisterHeaders,
+    body: JSON.stringify({ username: `sec03-forged-${suffix}`, password: "sec03-test-password" }),
+  });
+  assert.equal(crossOriginRegister.status, 403);
+
+  const noOriginRegisterHeaders = requestHeaders(running);
+  noOriginRegisterHeaders.delete("origin");
+  noOriginRegisterHeaders.set("content-type", "application/json");
+  const noOriginRegister = await fetch(`${running.baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: noOriginRegisterHeaders,
+    body: JSON.stringify({ username: `sec03-no-origin-${suffix}`, password: "sec03-test-password" }),
+  });
+  assert.equal(noOriginRegister.status, 403);
+
+  const first = await register(running, `sec03-first-${suffix}`);
+  const second = await register(running, `sec03-second-${suffix}`);
+  assert.equal(first.response.status, 201);
+  assert.equal(second.response.status, 201);
+
+  const firstUser = await (await authMe(running, first.cookie)).json() as { username: string };
+  const secondUser = await (await authMe(running, second.cookie)).json() as { username: string };
+  assert.notEqual(firstUser.username, secondUser.username);
+
+  for (const sourceOrigin of ["https://attacker.example", undefined]) {
+    const headers = requestHeaders(running);
+    if (sourceOrigin) headers.set("origin", sourceOrigin);
+    else headers.delete("origin");
+    headers.set("content-type", "application/json");
+    const blockedLogin = await fetch(`${running.baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ username: firstUser.username, password: "sec03-test-password" }),
+    });
+    assert.equal(blockedLogin.status, 403);
+    assert.equal(blockedLogin.headers.has("set-cookie"), false);
+  }
+
+  assert.equal((await logout(running, first.cookie, "https://attacker.example")).status, 403);
+  const missingOrigin = requestHeaders(running, first.cookie);
+  missingOrigin.delete("origin");
+  const missingOriginLogout = await fetch(`${running.baseUrl}/api/auth/logout`, {
+    method: "POST", headers: missingOrigin, body: "{}",
+  });
+  assert.equal(missingOriginLogout.status, 403);
+
+  const logoutResponse = await logout(running, first.cookie);
+  assert.equal(logoutResponse.status, 200);
+  const clearedCookie = logoutResponse.headers.get("set-cookie") ?? "";
+  assert.match(clearedCookie, /; HttpOnly/i);
+  assert.match(clearedCookie, /; Secure/i);
+  assert.match(clearedCookie, /; SameSite=Lax/i);
+  assert.match(clearedCookie, /; Path=\//i);
+  assert.equal((await authMe(running, first.cookie)).status, 401);
+  assert.equal((await authMe(running, second.cookie)).status, 200);
+});
+
+test("SEC-03: development request logging defaults on and can be disabled for a private instance", async () => {
+  const originalLog = console.log;
+  const captured: string[] = [];
+  console.log = (...values: unknown[]) => captured.push(values.join(" "));
+  try {
+    const development = await startApplication({
+      ...baseEnvironment,
+      NODE_ENV: "development",
+      SESSION_SECRET: "stable-development-only-session-secret",
+      TRUST_PROXY_HOPS: undefined,
+      REQUEST_LOGGING_ENABLED: undefined,
+    });
+    assert.equal(development.app.get("trust proxy"), 0, "proxy headers are ignored by default");
+    await fetch(`${development.baseUrl}/api/auth/me`);
+    assert.ok(captured.some((line) => line.includes("GET /api/auth/me 401 in ")));
+
+    captured.length = 0;
+    const privateInstance = await startApplication({ ...baseEnvironment, REQUEST_LOGGING_ENABLED: "false" });
+    await fetch(`${privateInstance.baseUrl}/api/auth/me`);
+    assert.equal(captured.length, 0);
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test("SEC-03: login and registration limits ignore spoofed forwarding headers when proxy trust is disabled", async () => {
+  const limited = await startApplication({ ...baseEnvironment, TRUST_PROXY_HOPS: "0" });
+  assert.equal(limited.app.get("trust proxy"), 0);
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const response = await fetch(`${limited.baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: limited.baseUrl,
+        "x-forwarded-for": `198.51.100.${attempt + 1}`,
+      },
+      body: JSON.stringify({ username: `missing-${suffix}`, password: "invalid-password" }),
+    });
+    assert.equal(response.status, 401);
+  }
+  const blockedLogin = await fetch(`${limited.baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: limited.baseUrl,
+      "x-forwarded-for": "203.0.113.77",
+    },
+    body: JSON.stringify({ username: `missing-${suffix}`, password: "invalid-password" }),
+  });
+  assert.equal(blockedLogin.status, 429);
+  assert.ok(blockedLogin.headers.has("retry-after"));
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = await fetch(`${limited.baseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: limited.baseUrl },
+      body: JSON.stringify({ username: "x", password: "short" }),
+    });
+    assert.equal(response.status, 400);
+  }
+  const blockedRegistration = await fetch(`${limited.baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: limited.baseUrl, "x-forwarded-for": "192.0.2.55" },
+    body: JSON.stringify({ username: "x", password: "short" }),
+  });
+  assert.equal(blockedRegistration.status, 429);
+});
