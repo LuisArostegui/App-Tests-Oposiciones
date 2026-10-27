@@ -31,6 +31,7 @@ let attemptId: number;
 let testSuffix: string;
 const creationQuestionIds: number[] = [];
 const creationAttemptIds: number[] = [];
+const creationResultIds: number[] = [];
 let ownerSecondQuestionId: number;
 let ownerOtherTestQuestionId: number;
 let foreignQuestionId: number;
@@ -42,13 +43,12 @@ before(async () => {
   ownerId = owner.id;
   otherUserId = otherUser.id;
 
-  const question = await storage.createQuestion({
+  const question = await storage.createQuestion(ownerId, {
     testId: `sec01-${testSuffix}.json`,
     questionText: "Pregunta ficticia original",
     answers: { A: "Respuesta A", B: "Respuesta B" },
     correctAnswer: "A",
     category: "Fixture de pruebas",
-    userId: ownerId,
   });
   questionId = question.id;
 
@@ -57,8 +57,8 @@ before(async () => {
     { testId: `sec01-other-${testSuffix}.json`, userId: ownerId },
     { testId: `sec01-foreign-${testSuffix}.json`, userId: otherUserId },
   ]) {
-    const created = await storage.createQuestion({
-      ...fixture,
+    const created = await storage.createQuestion(fixture.userId, {
+      testId: fixture.testId,
       questionText: "Pregunta ficticia para creación",
       answers: { A: "Respuesta A", B: "Respuesta B" },
       correctAnswer: "A",
@@ -102,6 +102,7 @@ after(async () => {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
   for (const id of creationAttemptIds) await db.delete(schema.testAttempts).where(eq(schema.testAttempts.id, id));
+  for (const id of creationResultIds) await db.delete(schema.results).where(eq(schema.results.id, id));
   for (const id of creationQuestionIds) await db.delete(schema.questions).where(eq(schema.questions.id, id));
   if (questionId) await db.delete(schema.questions).where(eq(schema.questions.id, questionId));
   if (attemptId) await db.delete(schema.testAttempts).where(eq(schema.testAttempts.id, attemptId));
@@ -236,8 +237,8 @@ test("SEC-01: question and attempt edits and deletes enforce ownership and prese
 test("SEC-01: owner can create an attempt with their test questions in the original order", async () => {
   const testId = `sec01-${testSuffix}.json`;
   // The original edit/delete case removes questionId, so use a dedicated second fixture.
-  const additional = await storage.createQuestion({
-    testId, userId: ownerId, questionText: "Otra pregunta ficticia",
+  const additional = await storage.createQuestion(ownerId, {
+    testId, questionText: "Otra pregunta ficticia",
     answers: { A: "Respuesta A", B: "Respuesta B" }, correctAnswer: "A", category: "Fixture de pruebas",
   });
   creationQuestionIds.push(additional.id);
@@ -280,6 +281,65 @@ test("SEC-01: client cannot supply the persisted question count", async () => {
   assert.equal(response.status, 400);
   const afterAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
   assert.deepEqual(afterAttempts, beforeAttempts);
+});
+
+test("SEC-01: question and result creation reject client-supplied owners and persist the session owner", async () => {
+  const questionTestId = `sec01-created-question-${testSuffix}.json`;
+  const questionPayload = {
+    testId: questionTestId,
+    questionText: "Pregunta ficticia de creación",
+    answers: { A: "Respuesta A" },
+    correctAnswer: "A",
+    category: "Fixture de pruebas",
+  };
+  const questionsBefore = await db.select().from(schema.questions).where(eq(schema.questions.testId, questionTestId));
+  const spoofedQuestion = await request("/api/questions", {
+    method: "POST", body: JSON.stringify({ ...questionPayload, userId: otherUserId }),
+  }, ownerId);
+  assert.equal(spoofedQuestion.status, 400);
+  assert.deepEqual(await db.select().from(schema.questions).where(eq(schema.questions.testId, questionTestId)), questionsBefore);
+
+  const createdQuestionResponse = await request("/api/questions", {
+    method: "POST", body: JSON.stringify(questionPayload),
+  }, ownerId);
+  assert.equal(createdQuestionResponse.status, 201);
+  const createdQuestion: { id: number; userId: number } = await createdQuestionResponse.json();
+  creationQuestionIds.push(createdQuestion.id);
+  assert.equal(createdQuestion.userId, ownerId);
+  const [persistedQuestion] = await db.select().from(schema.questions).where(eq(schema.questions.id, createdQuestion.id));
+  assert.equal(persistedQuestion?.userId, ownerId);
+
+  const importedTestId = `sec01-imported-${testSuffix}.json`;
+  const imported = await request("/api/tests/import", {
+    method: "POST",
+    body: JSON.stringify({
+      filename: importedTestId,
+      content: [{ pregunta: "Pregunta importada", respuestas: { A: "Respuesta A" }, respuesta_correcta: "A", userId: otherUserId }],
+    }),
+  }, ownerId);
+  assert.equal(imported.status, 201);
+  const [persistedImport] = await db.select().from(schema.questions).where(eq(schema.questions.testId, importedTestId));
+  assert.ok(persistedImport);
+  creationQuestionIds.push(persistedImport.id);
+  assert.equal(persistedImport.userId, ownerId);
+
+  const resultPayload = { testId: questionTestId, score: 80, correctCount: 4, totalQuestions: 5 };
+  const resultsBefore = await db.select().from(schema.results).where(eq(schema.results.testId, questionTestId));
+  const spoofedResult = await request("/api/results", {
+    method: "POST", body: JSON.stringify({ ...resultPayload, userId: otherUserId }),
+  }, ownerId);
+  assert.equal(spoofedResult.status, 400);
+  assert.deepEqual(await db.select().from(schema.results).where(eq(schema.results.testId, questionTestId)), resultsBefore);
+
+  const createdResultResponse = await request("/api/results", {
+    method: "POST", body: JSON.stringify(resultPayload),
+  }, ownerId);
+  assert.equal(createdResultResponse.status, 201);
+  const createdResult: { id: number; userId: number } = await createdResultResponse.json();
+  creationResultIds.push(createdResult.id);
+  assert.equal(createdResult.userId, ownerId);
+  const [persistedResult] = await db.select().from(schema.results).where(eq(schema.results.id, createdResult.id));
+  assert.equal(persistedResult?.userId, ownerId);
 });
 
 for (const invalid of [
