@@ -4,7 +4,6 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { InsertQuestion, registerSchema, loginSchema } from "@shared/schema";
-import fetch from "node-fetch";
 import { config } from "./config";
 import { passport } from "./auth";
 import bcrypt from "bcryptjs";
@@ -277,54 +276,12 @@ export async function registerRoutes(
   });
 
   // === Remote (Protected) ===
-  app.get(api.remote.list.path, requireAuth, async (req, res) => {
-    const url = req.query.url as string;
-    if (!url) return res.status(400).json({ message: "URL required" });
-
-    try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("Failed to fetch remote URL");
-      
-      const text = await response.text();
-      const jsonFiles: string[] = [];
-      const regex1 = /href="([^"]+\.json)"/g;
-      const regex2 = /href='([^']+\.json)'/g;
-      
-      let match;
-      while ((match = regex1.exec(text)) !== null) {
-        jsonFiles.push(match[1]);
-      }
-      while ((match = regex2.exec(text)) !== null) {
-        jsonFiles.push(match[1]);
-      }
-      
-      const allFiles = Array.from(new Set(jsonFiles));
-      
-      res.json(allFiles);
-    } catch (err) {
-      console.error("Remote list error:", err);
-      res.status(400).json({ message: "Failed to list remote files. Ensure the URL is accessible and is a directory listing." });
-    }
+  app.get(api.remote.list.path, requireAuth, (_req, res) => {
+    res.status(503).json({ message: "La importación remota no está disponible. Importa un archivo JSON local." });
   });
 
-  app.get(api.remote.fetch.path, requireAuth, async (req, res) => {
-    const url = req.query.url as string;
-    const filename = req.query.filename as string;
-    
-    if (!url || !filename) return res.status(400).json({ message: "URL and filename required" });
-
-    try {
-      const fullUrl = url.endsWith('/') ? `${url}${filename}` : `${url}/${filename}`;
-      const response = await fetch(fullUrl);
-      if (!response.ok) throw new Error("Failed to download file");
-      
-      const json = await response.json();
-      res.json(json);
-    } catch (err) {
-      console.error("Remote fetch error:", err);
-      res.status(400).json({ message: "Failed to fetch remote file content" });
-    }
+  app.get(api.remote.fetch.path, requireAuth, (_req, res) => {
+    res.status(503).json({ message: "La importación remota no está disponible. Importa un archivo JSON local." });
   });
-
   return httpServer;
 }

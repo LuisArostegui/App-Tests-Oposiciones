@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { useTests, useRemoteTests, useFetchRemoteTest, useDeleteTest, useRenameTest } from "@/hooks/use-tests";
+import { useTests, useDeleteTest, useRenameTest } from "@/hooks/use-tests";
 import { ImportDialog } from "@/components/ImportDialog";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -33,19 +33,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { FileText, Globe, RefreshCw, BarChart3, ChevronRight, Server, Trash2, Pencil, Edit3, LogOut, User } from "lucide-react";
+import { FileText, BarChart3, ChevronRight, Trash2, Pencil, Edit3, LogOut, User } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 
 export default function Home() {
   const { data: tests, isLoading: loadingTests } = useTests();
   const { user, logout, isLoggingOut } = useAuth();
-  const [remoteUrl, setRemoteUrl] = useState("");
-  const [connectUrl, setConnectUrl] = useState("");
   const [, navigate] = useLocation();
-  
-  const { data: remoteFiles, isLoading: loadingRemote, refetch: refetchRemote } = useRemoteTests(connectUrl || null);
-  const { mutate: fetchRemote, isPending: isDownloading } = useFetchRemoteTest();
   const { mutate: deleteTest, isPending: isDeleting } = useDeleteTest();
   const { mutate: renameTest, isPending: isRenaming } = useRenameTest();
 
@@ -53,13 +48,6 @@ export default function Home() {
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [selectedTest, setSelectedTest] = useState<string | null>(null);
   const [newTestName, setNewTestName] = useState("");
-
-  const handleConnect = () => {
-    if (!remoteUrl) return;
-    let url = remoteUrl;
-    if (!url.startsWith("http")) url = `http://${url}`;
-    setConnectUrl(url);
-  };
 
   const handleDeleteClick = (testId: string) => {
     // Forzar la limpieza del pointer-events
@@ -168,7 +156,7 @@ export default function Home() {
                   </div>
                   <div>
                     <h3 className="text-lg font-medium">No hay tests importados</h3>
-                    <p className="text-muted-foreground">Importa un archivo JSON o conéctate a un servidor remoto para empezar.</p>
+                    <p className="text-muted-foreground">Importa un archivo JSON guardado en tu dispositivo para empezar.</p>
                   </div>
                 </CardContent>
               </Card>
@@ -251,70 +239,16 @@ export default function Home() {
             )}
           </div>
 
-          {/* Sidebar: Remote Connection */}
+          {/* Remote imports are disabled until an administrator allowlist is implemented. */}
           <div className="space-y-6 max-h-[50vh] md:max-h-none overflow-y-auto md:overflow-visible">
             <h2 className="text-2xl font-semibold tracking-tight">Servidor Remoto</h2>
             <Card className="border-muted bg-card shadow-sm">
               <CardHeader className="pb-4">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Globe className="w-5 h-5 text-accent" /> Conectar
-                </CardTitle>
-                <CardDescription>Conecta a un servidor de red local</CardDescription>
+                <CardTitle className="text-lg">Descargas remotas desactivadas</CardTitle>
+                <CardDescription>Para proteger el servidor, la importación desde direcciones de red no está disponible.</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label>IP / URL del Servidor</Label>
-                  <div className="flex gap-2">
-                    <Input 
-                      placeholder="192.168.1.50:8000" 
-                      value={remoteUrl}
-                      onChange={(e) => setRemoteUrl(e.target.value)}
-                      className="font-mono text-sm"
-                      data-testid="input-remote-url"
-                    />
-                    <Button size="icon" onClick={handleConnect} disabled={!remoteUrl} data-testid="button-connect">
-                      <Server className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                {connectUrl && (
-                  <div className="pt-4 border-t space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-muted-foreground">Archivos Disponibles</span>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => refetchRemote()} data-testid="button-refresh-remote">
-                        <RefreshCw className={`w-3 h-3 ${loadingRemote ? 'animate-spin' : ''}`} />
-                      </Button>
-                    </div>
-
-                    {loadingRemote ? (
-                      <div className="space-y-2">
-                        <div className="h-8 w-full bg-muted rounded animate-pulse" />
-                        <div className="h-8 w-full bg-muted rounded animate-pulse" />
-                      </div>
-                    ) : remoteFiles?.length === 0 ? (
-                      <p className="text-sm text-muted-foreground text-center py-2">No se encontraron archivos.</p>
-                    ) : (
-                      <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
-                        {remoteFiles?.map((file) => (
-                          <div key={file} className="flex items-center justify-between p-2 rounded-lg border bg-muted/30 hover:bg-muted transition-colors text-sm">
-                            <span className="truncate flex-1 font-medium">{file}</span>
-                            <Button 
-                              size="sm" 
-                              variant="ghost" 
-                              className="text-primary hover:text-primary hover:bg-primary/10 h-7"
-                              disabled={isDownloading}
-                              onClick={() => fetchRemote({ url: connectUrl, filename: file })}
-                              data-testid={`button-download-${file}`}
-                            >
-                              Descargar
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+              <CardContent>
+                <p className="text-sm text-muted-foreground">Puedes seguir importando archivos JSON guardados en tu dispositivo.</p>
               </CardContent>
             </Card>
             
