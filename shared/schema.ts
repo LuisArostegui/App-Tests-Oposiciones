@@ -64,6 +64,21 @@ export const insertQuestionSchema = createInsertSchema(questions).omit({ id: tru
 export const insertResultSchema = createInsertSchema(results).omit({ id: true, completedAt: true });
 export const insertAttemptSchema = createInsertSchema(testAttempts).omit({ id: true, startedAt: true, completedAt: true });
 
+export const updateQuestionSchema = z.object({
+  questionText: z.string().optional(),
+  answers: z.record(z.string()).optional(),
+  correctAnswer: z.string().optional(),
+  category: z.string().nullable().optional(),
+}).strict();
+
+export const updateAttemptSchema = z.object({
+  currentIndex: z.number().optional(),
+  answers: z.record(z.string()).optional(),
+  status: z.enum(["in_progress", "completed"]).optional(),
+  correctCount: z.number().optional(),
+  score: z.number().optional(),
+}).strict();
+
 // Login schema (same as insert but for clarity)
 export const loginSchema = z.object({
   username: z.string().min(3, "El usuario debe tener al menos 3 caracteres"),
@@ -81,10 +96,12 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Question = typeof questions.$inferSelect;
 export type InsertQuestion = z.infer<typeof insertQuestionSchema>;
+export type UpdateQuestion = z.infer<typeof updateQuestionSchema>;
 export type Result = typeof results.$inferSelect;
 export type InsertResult = z.infer<typeof insertResultSchema>;
 export type TestAttempt = typeof testAttempts.$inferSelect;
 export type InsertAttempt = z.infer<typeof insertAttemptSchema>;
+export type UpdateAttempt = z.infer<typeof updateAttemptSchema>;
 
 // Helper for the frontend to know what answers look like
 export type AnswerMap = Record<string, string>;

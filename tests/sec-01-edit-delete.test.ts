@@ -1,0 +1,210 @@
+import assert from "node:assert/strict";
+import { after, before, test } from "node:test";
+import { eq } from "drizzle-orm";
+import express from "express";
+import session from "express-session";
+import { createServer, type Server } from "node:http";
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+if (!testDatabaseUrl) {
+  throw new Error("TEST_DATABASE_URL must point to an isolated test database");
+}
+if (testDatabaseUrl === process.env.DATABASE_URL) {
+  throw new Error("Tests must not use DATABASE_URL");
+}
+process.env.DATABASE_URL = testDatabaseUrl;
+
+const [{ registerRoutes }, { storage }, { db }, { passport }, schema] = await Promise.all([
+  import("../server/routes"),
+  import("../server/storage"),
+  import("../server/db"),
+  import("../server/auth"),
+  import("../shared/schema"),
+]);
+
+let server: Server;
+let baseUrl: string;
+let ownerId: number;
+let otherUserId: number;
+let questionId: number;
+let attemptId: number;
+let testSuffix: string;
+
+before(async () => {
+  testSuffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const owner = await storage.createUser({ username: `sec01-owner-${testSuffix}`, password: "test-only" });
+  const otherUser = await storage.createUser({ username: `sec01-other-${testSuffix}`, password: "test-only" });
+  ownerId = owner.id;
+  otherUserId = otherUser.id;
+
+  const question = await storage.createQuestion({
+    testId: `sec01-${testSuffix}.json`,
+    questionText: "Pregunta ficticia original",
+    answers: { A: "Respuesta A", B: "Respuesta B" },
+    correctAnswer: "A",
+    category: "Fixture de pruebas",
+    userId: ownerId,
+  });
+  questionId = question.id;
+
+  const attempt = await storage.createAttempt({
+    testId: `sec01-${testSuffix}.json`,
+    questionOrder: [questionId],
+    totalQuestions: 1,
+    userId: ownerId,
+  });
+  attemptId = attempt.id;
+
+  const app = express();
+  app.use(express.json());
+  app.use(session({ secret: "sec01-test-only-session-secret", resave: false, saveUninitialized: false }));
+  app.use(passport.initialize());
+  app.use(passport.session());
+  app.post("/__test/session/:userId", (req, res, next) => {
+    const sessionUserId = Number(req.params.userId);
+    const username = sessionUserId === ownerId ? `sec01-owner-${testSuffix}` : `sec01-other-${testSuffix}`;
+    req.login({ id: sessionUserId, username }, (error) => {
+      if (error) return next(error);
+      res.sendStatus(204);
+    });
+  });
+  server = createServer(app);
+  await registerRoutes(server, app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  baseUrl = `http://127.0.0.1:${address.port}`;
+});
+
+after(async () => {
+  if (server?.listening) {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+  if (questionId) await db.delete(schema.questions).where(eq(schema.questions.id, questionId));
+  if (attemptId) await db.delete(schema.testAttempts).where(eq(schema.testAttempts.id, attemptId));
+  if (ownerId) await db.delete(schema.users).where(eq(schema.users.id, ownerId));
+  if (otherUserId) await db.delete(schema.users).where(eq(schema.users.id, otherUserId));
+  const { pool } = await import("../server/db");
+  await pool.end();
+});
+
+async function request(path: string, options: RequestInit = {}, sessionUserId?: number): Promise<Response> {
+  const headers = new Headers(options.headers);
+  if (options.body) headers.set("content-type", "application/json");
+  if (sessionUserId !== undefined) {
+    const sessionResponse = await fetch(`${baseUrl}/__test/session/${sessionUserId}`, { method: "POST" });
+    assert.equal(sessionResponse.status, 204);
+    const cookie = sessionResponse.headers.get("set-cookie")?.split(";", 1)[0];
+    assert.ok(cookie);
+    headers.set("cookie", cookie);
+  }
+  return fetch(`${baseUrl}${path}`, { ...options, headers });
+}
+
+async function readQuestion() {
+  const [question] = await db.select().from(schema.questions).where(eq(schema.questions.id, questionId));
+  return question;
+}
+
+async function readAttempt() {
+  const [attempt] = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.id, attemptId));
+  return attempt;
+}
+
+test("SEC-01: question and attempt edits and deletes enforce ownership and preserve protected fields", async () => {
+  const originalQuestion = await readQuestion();
+  const originalAttempt = await readAttempt();
+  assert.ok(originalQuestion);
+  assert.ok(originalAttempt);
+
+  const ownerQuestionUpdate = await request(`/api/questions/${questionId}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      questionText: "Pregunta ficticia editada",
+      answers: { A: "Respuesta A editada", B: "Respuesta B" },
+    }),
+  }, ownerId);
+  assert.equal(ownerQuestionUpdate.status, 200);
+  const questionAfterOwnerUpdate = await readQuestion();
+  assert.deepEqual(questionAfterOwnerUpdate?.answers, { A: "Respuesta A editada", B: "Respuesta B" });
+
+  const ownerAttemptUpdate = await request(`/api/attempts/${attemptId}`, {
+    method: "PUT",
+    body: JSON.stringify({ currentIndex: 1 }),
+  }, ownerId);
+  assert.equal(ownerAttemptUpdate.status, 200);
+
+  const protectedQuestionUpdate = await request(`/api/questions/${questionId}`, {
+    method: "PUT",
+    body: JSON.stringify({ userId: otherUserId, id: questionId + 9000, questionText: "Intento de reasignación" }),
+  }, ownerId);
+  assert.equal(protectedQuestionUpdate.status, 400);
+
+  const protectedTestIdUpdate = await request(`/api/questions/${questionId}`, {
+    method: "PUT",
+    body: JSON.stringify({ testId: "sec01-otro-test.json" }),
+  }, ownerId);
+  assert.equal(protectedTestIdUpdate.status, 400);
+  const questionAfterProtectedUpdate = await readQuestion();
+  assert.equal(questionAfterProtectedUpdate?.userId, ownerId);
+  assert.equal(questionAfterProtectedUpdate?.id, questionId);
+  assert.equal(questionAfterProtectedUpdate?.testId, `sec01-${testSuffix}.json`);
+  assert.equal(questionAfterProtectedUpdate?.questionText, "Pregunta ficticia editada");
+  assert.deepEqual(questionAfterProtectedUpdate?.answers, { A: "Respuesta A editada", B: "Respuesta B" });
+
+  const loggedValidationErrors: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => loggedValidationErrors.push(args);
+  let protectedAttemptUpdate: Response;
+  try {
+    protectedAttemptUpdate = await request(`/api/attempts/${attemptId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        userId: otherUserId,
+        id: attemptId + 9000,
+        testId: "sec01-otro-test.json",
+        questionOrder: [],
+        startedAt: "2000-01-01T00:00:00.000Z",
+        currentIndex: 2,
+      }),
+    }, ownerId);
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.equal(protectedAttemptUpdate.status, 400);
+  assert.equal(loggedValidationErrors.length, 0);
+  const attemptAfterProtectedUpdate = await readAttempt();
+  assert.equal(attemptAfterProtectedUpdate?.userId, ownerId);
+  assert.equal(attemptAfterProtectedUpdate?.id, attemptId);
+  assert.equal(attemptAfterProtectedUpdate?.testId, originalAttempt.testId);
+  assert.deepEqual(attemptAfterProtectedUpdate?.questionOrder, originalAttempt.questionOrder);
+  assert.equal(attemptAfterProtectedUpdate?.currentIndex, 1);
+
+  for (const resource of ["questions", "attempts"] as const) {
+    const id = resource === "questions" ? questionId : attemptId;
+    const path = `/api/${resource}/${id}`;
+    const updateBody = resource === "questions" ? { questionText: "Cambio ajeno" } : { currentIndex: 2 };
+    const foreignUpdate = await request(path, { method: "PUT", body: JSON.stringify(updateBody) }, otherUserId);
+    assert.equal(foreignUpdate.status, 404);
+    const foreignDelete = await request(path, { method: "DELETE" }, otherUserId);
+    assert.equal(foreignDelete.status, 404);
+    const missingUpdate = await request(`/api/${resource}/2147483000`, { method: "PUT", body: JSON.stringify(updateBody) }, ownerId);
+    assert.equal(missingUpdate.status, 404);
+    const missingDelete = await request(`/api/${resource}/2147483000`, { method: "DELETE" }, ownerId);
+    assert.equal(missingDelete.status, 404);
+    assert.equal((await request(path, { method: "PUT", body: JSON.stringify(updateBody) })).status, 401);
+    assert.equal((await request(path, { method: "DELETE" })).status, 401);
+  }
+
+  const unchangedQuestion = await readQuestion();
+  const unchangedAttempt = await readAttempt();
+  assert.equal(unchangedQuestion?.userId, ownerId);
+  assert.equal(unchangedQuestion?.questionText, "Pregunta ficticia editada");
+  assert.equal(unchangedAttempt?.userId, ownerId);
+  assert.equal(unchangedAttempt?.currentIndex, 1);
+
+  assert.equal((await request(`/api/questions/${questionId}`, { method: "DELETE" }, ownerId)).status, 204);
+  assert.equal((await readQuestion()), undefined);
+  assert.equal((await request(`/api/attempts/${attemptId}`, { method: "DELETE" }, ownerId)).status, 204);
+  assert.equal((await readAttempt()), undefined);
+});

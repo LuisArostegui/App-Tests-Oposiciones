@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { insertQuestionSchema, insertResultSchema, insertAttemptSchema, questions, results, testAttempts } from './schema';
+import { insertQuestionSchema, insertResultSchema, insertAttemptSchema, updateQuestionSchema, updateAttemptSchema, questions, results, testAttempts } from './schema';
 
 export const errorSchemas = {
   validation: z.object({
@@ -81,7 +81,7 @@ export const api = {
     update: {
       method: 'PUT' as const,
       path: '/api/questions/:id',
-      input: insertQuestionSchema.partial(),
+      input: updateQuestionSchema,
       responses: {
         200: z.custom<typeof questions.$inferSelect>(),
         400: errorSchemas.validation,
@@ -145,13 +145,7 @@ export const api = {
     update: {
       method: 'PUT' as const,
       path: '/api/attempts/:id',
-      input: z.object({
-        currentIndex: z.number().optional(),
-        answers: z.record(z.string()).optional(),
-        status: z.enum(['in_progress', 'completed']).optional(),
-        correctCount: z.number().optional(),
-        score: z.number().optional(),
-      }),
+      input: updateAttemptSchema,
       responses: {
         200: z.custom<typeof testAttempts.$inferSelect>(),
         404: errorSchemas.notFound,
