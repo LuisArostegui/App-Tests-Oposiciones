@@ -6,6 +6,8 @@ import { z } from "zod";
 import { InsertQuestion, registerSchema, loginSchema } from "@shared/schema";
 import { config } from "./config";
 import { passport } from "./auth";
+import { asyncHandler } from "./http-middleware";
+import { parsePositiveId } from "./validation";
 import bcrypt from "bcryptjs";
 
 import fs from "fs";
@@ -29,7 +31,7 @@ export async function registerRoutes(
   });
 
   // === Auth Routes ===
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", asyncHandler(async (req, res, next) => {
     try {
       const { username, password } = registerSchema.parse(req.body);
       
@@ -42,39 +44,35 @@ export async function registerRoutes(
       const user = await storage.createUser({ username, password: hashedPassword });
 
       req.login({ id: user.id, username: user.username }, (err) => {
-        if (err) {
-          return res.status(500).json({ message: "Error al iniciar sesión" });
-        }
+        if (err) return next(err);
         res.status(201).json({ id: user.id, username: user.username });
       });
     } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
-      }
-      console.error("Register error:", err);
-      res.status(500).json({ message: "Error al registrar" });
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      throw err;
     }
-  });
+  }));
 
   app.post("/api/auth/login", (req, res, next) => {
     try {
       loginSchema.parse(req.body);
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
+        return res.status(400).json({ message: "Solicitud no válida" });
       }
+      return next(err);
     }
 
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) {
-        return res.status(500).json({ message: "Error al iniciar sesión" });
+        return next(err);
       }
       if (!user) {
         return res.status(401).json({ message: info?.message || "Credenciales incorrectas" });
       }
       req.login(user, (loginErr) => {
         if (loginErr) {
-          return res.status(500).json({ message: "Error al iniciar sesión" });
+          return next(loginErr);
         }
         res.json({ id: user.id, username: user.username });
       });
@@ -105,30 +103,30 @@ export async function registerRoutes(
   });
 
   // === Tests (Protected) ===
-  app.get(api.tests.list.path, requireAuth, async (req, res) => {
+  app.get(api.tests.list.path, requireAuth, asyncHandler(async (req, res) => {
     const tests = await storage.getTests(req.user!.id);
     res.json(tests);
-  });
+  }));
 
-  app.get(api.tests.get.path, requireAuth, async (req, res) => {
+  app.get(api.tests.get.path, requireAuth, asyncHandler(async (req, res) => {
     const testId = req.params.id;
     const questions = await storage.getQuestionsByTestId(testId, req.user!.id);
     if (!questions || questions.length === 0) {
       return res.status(404).json({ message: "Test not found" });
     }
     res.json(questions);
-  });
+  }));
 
-  app.delete(api.tests.delete.path, requireAuth, async (req, res) => {
+  app.delete(api.tests.delete.path, requireAuth, asyncHandler(async (req, res) => {
     const testId = req.params.id;
     const deleted = await storage.deleteTest(testId, req.user!.id);
     if (!deleted) {
       return res.status(404).json({ message: "Test not found" });
     }
     res.status(204).send();
-  });
+  }));
 
-  app.put(api.tests.rename.path, requireAuth, async (req, res) => {
+  app.put(api.tests.rename.path, requireAuth, asyncHandler(async (req, res) => {
     try {
       const oldTestId = req.params.id;
       const { newName } = api.tests.rename.input.parse(req.body);
@@ -139,12 +137,12 @@ export async function registerRoutes(
       }
       res.json({ success: true, newId: newTestId });
     } catch (err) {
-      console.error("Rename error:", err);
-      res.status(400).json({ message: "Invalid data" });
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      throw err;
     }
-  });
+  }));
 
-  app.post(api.tests.import.path, requireAuth, async (req, res) => {
+  app.post(api.tests.import.path, requireAuth, asyncHandler(async (req, res) => {
     try {
       const input = api.tests.import.input.parse(req.body);
       
@@ -164,26 +162,27 @@ export async function registerRoutes(
       
       res.status(201).json({ success: true, count: questionsToInsert.length });
     } catch (err) {
-      console.error("Import error:", err);
-      res.status(400).json({ message: "Invalid data format" });
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      throw err;
     }
-  });
+  }));
 
   // === Questions (Protected) ===
-  app.post(api.questions.create.path, requireAuth, async (req, res) => {
+  app.post(api.questions.create.path, requireAuth, asyncHandler(async (req, res) => {
     try {
       const input = api.questions.create.input.parse(req.body);
       const question = await storage.createQuestion(req.user!.id, input);
       res.status(201).json(question);
     } catch (err) {
-      console.error("Create question error:", err);
-      res.status(400).json({ message: "Validation error" });
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      throw err;
     }
-  });
+  }));
 
-  app.put(api.questions.update.path, requireAuth, async (req, res) => {
+  app.put(api.questions.update.path, requireAuth, asyncHandler(async (req, res) => {
     try {
-      const id = Number(req.params.id);
+      const id = parsePositiveId(req.params.id);
+      if (id === undefined) return res.status(400).json({ message: "Solicitud no válida" });
       const update = api.questions.update.input.parse(req.body);
       const updated = await storage.updateQuestion(id, req.user!.id, update);
       if (!updated) {
@@ -191,51 +190,55 @@ export async function registerRoutes(
       }
       res.json(updated);
     } catch (err) {
-      res.status(400).json({ message: "Validation error" });
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      throw err;
     }
-  });
+  }));
 
-  app.delete(api.questions.delete.path, requireAuth, async (req, res) => {
-    const id = Number(req.params.id);
+  app.delete(api.questions.delete.path, requireAuth, asyncHandler(async (req, res) => {
+    const id = parsePositiveId(req.params.id);
+    if (id === undefined) return res.status(400).json({ message: "Solicitud no válida" });
     const deleted = await storage.deleteQuestion(id, req.user!.id);
     if (!deleted) {
       return res.status(404).json({ message: "Question not found" });
     }
     res.status(204).send();
-  });
+  }));
 
   // === Results (Protected) ===
-  app.get(api.results.list.path, requireAuth, async (req, res) => {
+  app.get(api.results.list.path, requireAuth, asyncHandler(async (req, res) => {
     const results = await storage.getResults(req.user!.id);
     res.json(results);
-  });
+  }));
 
-  app.post(api.results.create.path, requireAuth, async (req, res) => {
+  app.post(api.results.create.path, requireAuth, asyncHandler(async (req, res) => {
     try {
       const input = api.results.create.input.parse(req.body);
       const result = await storage.createResult(req.user!.id, input);
       res.status(201).json(result);
     } catch (err) {
-      res.status(400).json({ message: "Validation error" });
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      throw err;
     }
-  });
+  }));
 
   // === Attempts (Protected) ===
-  app.get(api.attempts.list.path, requireAuth, async (req, res) => {
+  app.get(api.attempts.list.path, requireAuth, asyncHandler(async (req, res) => {
     const attempts = await storage.getAttempts(req.user!.id);
     res.json(attempts);
-  });
+  }));
 
-  app.get(api.attempts.get.path, requireAuth, async (req, res) => {
-    const id = Number(req.params.id);
+  app.get(api.attempts.get.path, requireAuth, asyncHandler(async (req, res) => {
+    const id = parsePositiveId(req.params.id);
+    if (id === undefined) return res.status(400).json({ message: "Solicitud no válida" });
     const attempt = await storage.getAttempt(id, req.user!.id);
     if (!attempt) {
       return res.status(404).json({ message: "Attempt not found" });
     }
     res.json(attempt);
-  });
+  }));
 
-  app.post(api.attempts.create.path, requireAuth, async (req, res) => {
+  app.post(api.attempts.create.path, requireAuth, asyncHandler(async (req, res) => {
     try {
       const input = api.attempts.create.input.parse(req.body);
       const attempt = await storage.createAttempt({ ...input, userId: req.user!.id });
@@ -244,14 +247,15 @@ export async function registerRoutes(
       }
       res.status(201).json(attempt);
     } catch (err) {
-      console.error("Create attempt error:", err);
-      res.status(400).json({ message: "Validation error" });
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      throw err;
     }
-  });
+  }));
 
-  app.put(api.attempts.update.path, requireAuth, async (req, res) => {
+  app.put(api.attempts.update.path, requireAuth, asyncHandler(async (req, res) => {
     try {
-      const id = Number(req.params.id);
+      const id = parsePositiveId(req.params.id);
+      if (id === undefined) return res.status(400).json({ message: "Solicitud no válida" });
       const update = api.attempts.update.input.parse(req.body);
       const updated = await storage.updateAttempt(id, req.user!.id, update);
       if (!updated) {
@@ -259,21 +263,20 @@ export async function registerRoutes(
       }
       res.json(updated);
     } catch (err) {
-      if (!(err instanceof z.ZodError)) {
-        console.error("Update attempt error:", err);
-      }
-      res.status(400).json({ message: "Validation error" });
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      throw err;
     }
-  });
+  }));
 
-  app.delete(api.attempts.delete.path, requireAuth, async (req, res) => {
-    const id = Number(req.params.id);
+  app.delete(api.attempts.delete.path, requireAuth, asyncHandler(async (req, res) => {
+    const id = parsePositiveId(req.params.id);
+    if (id === undefined) return res.status(400).json({ message: "Solicitud no válida" });
     const deleted = await storage.deleteAttempt(id, req.user!.id);
     if (!deleted) {
       return res.status(404).json({ message: "Attempt not found" });
     }
     res.status(204).send();
-  });
+  }));
 
   // === Remote (Protected) ===
   app.get(api.remote.list.path, requireAuth, (_req, res) => {
