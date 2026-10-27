@@ -25,17 +25,16 @@ export interface IStorage {
   // Test/Questions
   getTests(userId: number): Promise<{ id: string; count: number; category: string | null }[]>;
   getQuestionsByTestId(testId: string, userId: number): Promise<Question[]>;
-  createQuestions(questionsList: InsertQuestion[]): Promise<void>;
-  createQuestion(question: InsertQuestion): Promise<Question>;
+  createQuestions(userId: number, questionsList: InsertQuestion[]): Promise<void>;
+  createQuestion(userId: number, question: InsertQuestion): Promise<Question>;
   updateQuestion(id: number, userId: number, question: UpdateQuestion): Promise<Question | undefined>;
   deleteQuestion(id: number, userId: number): Promise<boolean>;
-  deleteTest(testId: string, userId: number): Promise<void>;
-  renameTest(oldTestId: string, newTestId: string, userId: number): Promise<void>;
+  deleteTest(testId: string, userId: number): Promise<boolean>;
+  renameTest(oldTestId: string, newTestId: string, userId: number): Promise<boolean>;
   
   // Results
   getResults(userId: number): Promise<Result[]>;
-  createResult(result: InsertResult): Promise<Result>;
-  deleteResult(id: number): Promise<void>;
+  createResult(userId: number, result: InsertResult): Promise<Result>;
 
   // Attempts
   getAttempts(userId: number): Promise<TestAttempt[]>;
@@ -82,13 +81,13 @@ export class DatabaseStorage implements IStorage {
     );
   }
 
-  async createQuestions(questionsList: InsertQuestion[]): Promise<void> {
+  async createQuestions(userId: number, questionsList: InsertQuestion[]): Promise<void> {
     if (questionsList.length === 0) return;
-    await db.insert(questions).values(questionsList);
+    await db.insert(questions).values(questionsList.map(question => ({ ...question, userId })));
   }
 
-  async createQuestion(question: InsertQuestion): Promise<Question> {
-    const [created] = await db.insert(questions).values(question).returning();
+  async createQuestion(userId: number, question: InsertQuestion): Promise<Question> {
+    const [created] = await db.insert(questions).values({ ...question, userId }).returning();
     return created;
   }
 
@@ -109,16 +108,19 @@ export class DatabaseStorage implements IStorage {
     return deleted.length > 0;
   }
 
-  async deleteTest(testId: string, userId: number): Promise<void> {
-    await db.delete(questions).where(
+  async deleteTest(testId: string, userId: number): Promise<boolean> {
+    const deleted = await db.delete(questions).where(
       and(eq(questions.testId, testId), eq(questions.userId, userId))
-    );
+    ).returning({ id: questions.id });
+    return deleted.length > 0;
   }
 
-  async renameTest(oldTestId: string, newTestId: string, userId: number): Promise<void> {
-    await db.update(questions)
+  async renameTest(oldTestId: string, newTestId: string, userId: number): Promise<boolean> {
+    const renamed = await db.update(questions)
       .set({ testId: newTestId })
-      .where(and(eq(questions.testId, oldTestId), eq(questions.userId, userId)));
+      .where(and(eq(questions.testId, oldTestId), eq(questions.userId, userId)))
+      .returning({ id: questions.id });
+    return renamed.length > 0;
   }
 
   // Results
@@ -128,13 +130,9 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(results.completedAt));
   }
 
-  async createResult(result: InsertResult): Promise<Result> {
-    const [saved] = await db.insert(results).values(result).returning();
+  async createResult(userId: number, result: InsertResult): Promise<Result> {
+    const [saved] = await db.insert(results).values({ ...result, userId }).returning();
     return saved;
-  }
-
-  async deleteResult(id: number): Promise<void> {
-    await db.delete(results).where(eq(results.id, id));
   }
 
   // Attempts

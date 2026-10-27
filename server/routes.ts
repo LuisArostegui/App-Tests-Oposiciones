@@ -122,7 +122,10 @@ export async function registerRoutes(
 
   app.delete(api.tests.delete.path, requireAuth, async (req, res) => {
     const testId = req.params.id;
-    await storage.deleteTest(testId, req.user!.id);
+    const deleted = await storage.deleteTest(testId, req.user!.id);
+    if (!deleted) {
+      return res.status(404).json({ message: "Test not found" });
+    }
     res.status(204).send();
   });
 
@@ -131,7 +134,10 @@ export async function registerRoutes(
       const oldTestId = req.params.id;
       const { newName } = api.tests.rename.input.parse(req.body);
       const newTestId = newName.endsWith('.json') ? newName : `${newName}.json`;
-      await storage.renameTest(oldTestId, newTestId, req.user!.id);
+      const renamed = await storage.renameTest(oldTestId, newTestId, req.user!.id);
+      if (!renamed) {
+        return res.status(404).json({ message: "Test not found" });
+      }
       res.json({ success: true, newId: newTestId });
     } catch (err) {
       console.error("Rename error:", err);
@@ -149,14 +155,13 @@ export async function registerRoutes(
         answers: q.respuestas,
         correctAnswer: q.respuesta_correcta,
         category: q.oposicion || "General",
-        userId: req.user!.id,
       }));
 
       if (questionsToInsert.length === 0) {
         return res.status(400).json({ message: "No valid questions found in JSON" });
       }
 
-      await storage.createQuestions(questionsToInsert);
+      await storage.createQuestions(req.user!.id, questionsToInsert);
       
       res.status(201).json({ success: true, count: questionsToInsert.length });
     } catch (err) {
@@ -169,7 +174,7 @@ export async function registerRoutes(
   app.post(api.questions.create.path, requireAuth, async (req, res) => {
     try {
       const input = api.questions.create.input.parse(req.body);
-      const question = await storage.createQuestion({ ...input, userId: req.user!.id });
+      const question = await storage.createQuestion(req.user!.id, input);
       res.status(201).json(question);
     } catch (err) {
       console.error("Create question error:", err);
@@ -209,7 +214,7 @@ export async function registerRoutes(
   app.post(api.results.create.path, requireAuth, async (req, res) => {
     try {
       const input = api.results.create.input.parse(req.body);
-      const result = await storage.createResult({ ...input, userId: req.user!.id });
+      const result = await storage.createResult(req.user!.id, input);
       res.status(201).json(result);
     } catch (err) {
       res.status(400).json({ message: "Validation error" });

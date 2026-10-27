@@ -60,8 +60,8 @@ export const sessions = pgTable("session", {
 // === SCHEMAS ===
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
-export const insertQuestionSchema = createInsertSchema(questions).omit({ id: true });
-export const insertResultSchema = createInsertSchema(results).omit({ id: true, completedAt: true });
+export const insertQuestionSchema = createInsertSchema(questions).omit({ id: true, userId: true }).strict();
+export const insertResultSchema = createInsertSchema(results).omit({ id: true, completedAt: true, userId: true }).strict();
 export const insertAttemptSchema = createInsertSchema(testAttempts).omit({ id: true, startedAt: true, completedAt: true });
 
 export const updateQuestionSchema = z.object({
