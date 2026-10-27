@@ -221,7 +221,7 @@ export async function registerRoutes(
 
   app.get(api.attempts.get.path, requireAuth, async (req, res) => {
     const id = Number(req.params.id);
-    const attempt = await storage.getAttempt(id);
+    const attempt = await storage.getAttempt(id, req.user!.id);
     if (!attempt) {
       return res.status(404).json({ message: "Attempt not found" });
     }

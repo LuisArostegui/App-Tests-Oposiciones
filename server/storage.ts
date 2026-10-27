@@ -37,7 +37,7 @@ export interface IStorage {
 
   // Attempts
   getAttempts(userId?: number): Promise<TestAttempt[]>;
-  getAttempt(id: number): Promise<TestAttempt | undefined>;
+  getAttempt(id: number, userId: number): Promise<TestAttempt | undefined>;
   createAttempt(attempt: { testId: string; questionOrder: number[]; totalQuestions: number; userId?: number }): Promise<TestAttempt>;
   updateAttempt(id: number, update: Partial<TestAttempt>): Promise<TestAttempt | undefined>;
   deleteAttempt(id: number): Promise<void>;
@@ -169,8 +169,16 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(testAttempts).orderBy(desc(testAttempts.startedAt));
   }
 
-  async getAttempt(id: number): Promise<TestAttempt | undefined> {
-    const [attempt] = await db.select().from(testAttempts).where(eq(testAttempts.id, id));
+  async getAttempt(id: number, userId: number): Promise<TestAttempt | undefined> {
+    const [attempt] = await db
+      .select()
+      .from(testAttempts)
+      .where(
+        and(
+          eq(testAttempts.id, id),
+          eq(testAttempts.userId, userId),
+        ),
+      );
     return attempt;
   }
 
