@@ -31,7 +31,7 @@ export function useCreateAttempt() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (data: { testId: string; questionOrder: number[]; totalQuestions: number }) => {
+    mutationFn: async (data: { testId: string; questionOrder: number[] }) => {
       const res = await fetch(api.attempts.create.path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

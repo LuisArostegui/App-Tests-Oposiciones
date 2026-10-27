@@ -174,7 +174,6 @@ export default function TestView() {
       const attempt = await createAttempt({
         testId,
         questionOrder,
-        totalQuestions: activeQuestions.length,
       });
       setAttemptId(attempt.id);
       // Update URL with attempt ID for refresh support

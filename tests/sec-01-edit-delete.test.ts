@@ -243,7 +243,7 @@ test("SEC-01: owner can create an attempt with their test questions in the origi
   creationQuestionIds.push(additional.id);
   const order = [additional.id, ownerSecondQuestionId];
   const response = await request("/api/attempts", {
-    method: "POST", body: JSON.stringify({ testId, questionOrder: order, totalQuestions: 2 }),
+    method: "POST", body: JSON.stringify({ testId, questionOrder: order }),
   }, ownerId);
   assert.equal(response.status, 201);
   const body: { id: number } = await response.json();
@@ -256,18 +256,20 @@ test("SEC-01: owner can create an attempt with their test questions in the origi
   assert.equal(attempt.totalQuestions, 2);
 });
 
-test("SEC-01: client cannot forge the persisted question count", async () => {
+test("SEC-01: client cannot supply the persisted question count", async () => {
+  const beforeAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
   const response = await request("/api/attempts", {
     method: "POST", body: JSON.stringify({
       testId: `sec01-${testSuffix}.json`, questionOrder: [ownerSecondQuestionId], totalQuestions: 999,
     }),
   }, ownerId);
-  assert.equal(response.status, 201);
-  const body: { id: number } = await response.json();
-  creationAttemptIds.push(body.id);
-  const [attempt] = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.id, body.id));
-  assert.ok(attempt);
-  assert.equal(attempt.totalQuestions, 1);
+  if (response.status === 201) {
+    const body: { id: number } = await response.json();
+    creationAttemptIds.push(body.id);
+  }
+  assert.equal(response.status, 400);
+  const afterAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
+  assert.deepEqual(afterAttempts, beforeAttempts);
 });
 
 for (const invalid of [
@@ -276,12 +278,15 @@ for (const invalid of [
   { name: "question from another owner test", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [ownerOtherTestQuestionId] }) },
   { name: "nonexistent question", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [2147483000] }) },
   { name: "duplicate questions", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [ownerSecondQuestionId, ownerSecondQuestionId] }) },
+  { name: "zero question ID", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [0] }) },
+  { name: "negative question ID", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [-1] }) },
+  { name: "fractional question ID", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [1.5] }) },
   { name: "empty question order", input: () => ({ testId: `sec01-${testSuffix}.json`, questionOrder: [] }) },
 ]) {
   test(`SEC-01: attempt creation rejects ${invalid.name} without changing attempts`, async () => {
     const beforeAttempts = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.userId, ownerId));
     const response = await request("/api/attempts", {
-      method: "POST", body: JSON.stringify({ ...invalid.input(), totalQuestions: 1 }),
+      method: "POST", body: JSON.stringify(invalid.input()),
     }, ownerId);
     if (response.status === 201) {
       const body: { id: number } = await response.json();
