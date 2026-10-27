@@ -387,3 +387,5 @@ Al publicar SEC-05, una instalación que aún ejecuta la PWA antigua debe termin
 En V1 la API necesita conexión. Sus respuestas no se guardan en Cache Storage ni en cachés HTTP; sin conexión se muestra un error reintentable y no se recuperan datos privados guardados por una versión anterior.
 
 Para repetir las comprobaciones reales en Chrome después de `npm run build`, inicia `node tests/browser/sec-05-server.mjs` y abre `http://localhost:4174/sec05-browser-test.html`. La página precarga una caché v1 privada, conserva una caché ajena y comprueba API online/offline y recursos estáticos contra el service worker del build. Para el flujo de sesiones con cuentas ficticias, inicia `node tests/browser/sec-05-app-server.mjs` y abre `http://localhost:4175/login` en dos pestañas; usa `account-a` y `account-b` con cualquier contraseña de prueba, sin una base de datos.
+
+El flujo de login/logout A → B en dos pestañas requiere comprobación manual y no forma parte de `npm test` ni del CI. No se completó esa interacción de UI en esta validación; las pruebas automáticas cubren cancelación/limpieza del estado de consulta y la coordinación de transiciones entre pestañas.
