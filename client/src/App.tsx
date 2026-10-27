@@ -101,7 +101,9 @@ function Router() {
             <AnimatedPage><Home /></AnimatedPage>
           </ProtectedRoute>
         </Route>
-        <Route path="/test/:id" component={TestView} />
+        <Route path="/test/:id">
+          <ProtectedRoute><TestView /></ProtectedRoute>
+        </Route>
         <Route path="/results">
           <ProtectedRoute>
             <AnimatedPage><Results /></AnimatedPage>
@@ -124,7 +126,7 @@ function AppContent() {
   const [showSplash, setShowSplash] = useState(true);
   const [location] = useLocation();
   const { isAuthenticated } = useAuth();
-  useServiceWorker();
+  const serviceWorker = useServiceWorker();
 
   const isTestView = location.startsWith("/test/");
   const isAuthPage = location === "/login" || location === "/register";
@@ -135,6 +137,18 @@ function AppContent() {
         <ConnectionStatus onComplete={() => setShowSplash(false)} />
       )}
       <Toaster />
+      {serviceWorker.isUpdateAvailable && (
+        <div className="fixed inset-x-0 top-0 z-[60] flex items-center justify-center gap-3 bg-amber-100 px-4 py-3 text-sm text-amber-950 shadow dark:bg-amber-950 dark:text-amber-50">
+          <span>Actualización de seguridad lista. Termina el test y cierra todas las pestañas de la app para aplicarla.</span>
+          <button
+            type="button"
+            className="rounded bg-amber-900 px-3 py-1 font-medium text-white dark:bg-amber-100 dark:text-amber-950"
+            onClick={serviceWorker.dismissUpdateNotice}
+          >
+            Entendido
+          </button>
+        </div>
+      )}
       <div className={isTestView || isAuthPage ? "" : "pb-16 md:pb-0"}>
         <Router />
       </div>

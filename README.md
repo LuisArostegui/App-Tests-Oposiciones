@@ -378,3 +378,12 @@ Este proyecto está bajo la Licencia MIT. Ver el archivo [LICENSE](LICENSE) para
 [Solicitar Feature](../../issues)
 
 </div>
+# Actualización de seguridad de la PWA
+
+La actualización SEC-05 usa una nueva versión de caché y elimina las cachés anteriores cuyo nombre pertenece a `opostest-`. Durante la activación conserva recursos estáticos que ya estaban guardados, elimina respuestas `/api` antiguas y deja intactas las cachés de otras aplicaciones.
+
+Al publicar SEC-05, una instalación que aún ejecuta la PWA antigua debe terminar el test y cerrar todas las pestañas y ventanas de OposTest Pro; las versiones anteriores no pueden mostrar el nuevo aviso. El navegador activa el nuevo service worker cuando ya no quedan pestañas controladas por el anterior. Después, vuelve a abrir la app con conexión para cargar la versión nueva. En versiones nuevas, el aviso indica esta operación. No se fuerza una recarga mientras el test está abierto.
+
+En V1 la API necesita conexión. Sus respuestas no se guardan en Cache Storage ni en cachés HTTP; sin conexión se muestra un error reintentable y no se recuperan datos privados guardados por una versión anterior.
+
+Para repetir las comprobaciones reales en Chrome después de `npm run build`, inicia `node tests/browser/sec-05-server.mjs` y abre `http://localhost:4174/sec05-browser-test.html`. La página precarga una caché v1 privada, conserva una caché ajena y comprueba API online/offline y recursos estáticos contra el service worker del build. Para el flujo de sesiones con cuentas ficticias, inicia `node tests/browser/sec-05-app-server.mjs` y abre `http://localhost:4175/login` en dos pestañas; usa `account-a` y `account-b` con cualquier contraseña de prueba, sin una base de datos.

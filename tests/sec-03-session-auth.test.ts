@@ -226,9 +226,13 @@ test("SEC-03: sessions are isolated and logout requires a same-origin request", 
   const second = await register(running, `sec03-second-${suffix}`);
   assert.equal(first.response.status, 201);
   assert.equal(second.response.status, 201);
+  assert.equal(first.response.headers.get("cache-control"), "no-store");
 
   const firstUser = await (await authMe(running, first.cookie)).json() as { username: string };
   const secondUser = await (await authMe(running, second.cookie)).json() as { username: string };
+  const authenticatedApiResponse = await authMe(running, first.cookie);
+  assert.equal(authenticatedApiResponse.status, 200);
+  assert.equal(authenticatedApiResponse.headers.get("cache-control"), "no-store");
   assert.notEqual(firstUser.username, secondUser.username);
 
   for (const sourceOrigin of ["https://attacker.example", undefined]) {
@@ -242,6 +246,7 @@ test("SEC-03: sessions are isolated and logout requires a same-origin request", 
       body: JSON.stringify({ username: firstUser.username, password: "sec03-test-password" }),
     });
     assert.equal(blockedLogin.status, 403);
+    assert.equal(blockedLogin.headers.get("cache-control"), "no-store");
     assert.equal(blockedLogin.headers.has("set-cookie"), false);
   }
 
@@ -255,12 +260,15 @@ test("SEC-03: sessions are isolated and logout requires a same-origin request", 
 
   const logoutResponse = await logout(running, first.cookie);
   assert.equal(logoutResponse.status, 200);
+  assert.equal(logoutResponse.headers.get("cache-control"), "no-store");
   const clearedCookie = logoutResponse.headers.get("set-cookie") ?? "";
   assert.match(clearedCookie, /; HttpOnly/i);
   assert.match(clearedCookie, /; Secure/i);
   assert.match(clearedCookie, /; SameSite=Lax/i);
   assert.match(clearedCookie, /; Path=\//i);
-  assert.equal((await authMe(running, first.cookie)).status, 401);
+  const expiredSession = await authMe(running, first.cookie);
+  assert.equal(expiredSession.status, 401);
+  assert.equal(expiredSession.headers.get("cache-control"), "no-store");
   assert.equal((await authMe(running, second.cookie)).status, 200);
 });
 

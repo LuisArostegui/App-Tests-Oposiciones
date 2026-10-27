@@ -33,6 +33,7 @@ export function useServiceWorker() {
           ...prev,
           isRegistered: true,
           registration,
+          isUpdateAvailable: Boolean(registration.waiting),
         }));
 
         registration.addEventListener("updatefound", () => {
@@ -62,12 +63,9 @@ export function useServiceWorker() {
     }
   };
 
-  const skipWaiting = () => {
-    if (status.registration?.waiting) {
-      status.registration.waiting.postMessage({ type: "SKIP_WAITING" });
-      window.location.reload();
-    }
+  const dismissUpdateNotice = () => {
+    setStatus((prev) => ({ ...prev, isUpdateAvailable: false }));
   };
 
-  return { ...status, update, skipWaiting };
+  return { ...status, update, dismissUpdateNotice };
 }
