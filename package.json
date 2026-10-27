@@ -10,7 +10,7 @@
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "test": "tsx script/run-tests.ts",
-    "test:sec01": "tsx script/run-tests.ts tests/sec-01-edit-delete.test.ts"
+    "test:sec01": "tsx script/run-tests.ts tests/sec-01-edit-delete.test.ts tests/sec-01-private-storage-owner.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
