@@ -6,11 +6,13 @@ import {
   users,
   type InsertQuestion,
   type Question,
+  type UpdateQuestion,
   type InsertResult,
   type Result,
   type TestAttempt,
   type User,
-  type InsertUser
+  type InsertUser,
+  type UpdateAttempt,
 } from "@shared/schema";
 import { eq, desc, sql, and } from "drizzle-orm";
 
@@ -25,8 +27,8 @@ export interface IStorage {
   getQuestionsByTestId(testId: string, userId?: number): Promise<Question[]>;
   createQuestions(questionsList: InsertQuestion[]): Promise<void>;
   createQuestion(question: InsertQuestion): Promise<Question>;
-  updateQuestion(id: number, question: Partial<InsertQuestion>): Promise<Question | undefined>;
-  deleteQuestion(id: number): Promise<void>;
+  updateQuestion(id: number, userId: number, question: UpdateQuestion): Promise<Question | undefined>;
+  deleteQuestion(id: number, userId: number): Promise<boolean>;
   deleteTest(testId: string, userId?: number): Promise<void>;
   renameTest(oldTestId: string, newTestId: string, userId?: number): Promise<void>;
   
@@ -39,8 +41,8 @@ export interface IStorage {
   getAttempts(userId?: number): Promise<TestAttempt[]>;
   getAttempt(id: number, userId: number): Promise<TestAttempt | undefined>;
   createAttempt(attempt: { testId: string; questionOrder: number[]; totalQuestions: number; userId?: number }): Promise<TestAttempt>;
-  updateAttempt(id: number, update: Partial<TestAttempt>): Promise<TestAttempt | undefined>;
-  deleteAttempt(id: number): Promise<void>;
+  updateAttempt(id: number, userId: number, update: UpdateAttempt): Promise<TestAttempt | undefined>;
+  deleteAttempt(id: number, userId: number): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -105,17 +107,21 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updateQuestion(id: number, update: Partial<InsertQuestion>): Promise<Question | undefined> {
+  async updateQuestion(id: number, userId: number, update: UpdateQuestion): Promise<Question | undefined> {
     const [updated] = await db
       .update(questions)
       .set(update)
-      .where(eq(questions.id, id))
+      .where(and(eq(questions.id, id), eq(questions.userId, userId)))
       .returning();
     return updated;
   }
 
-  async deleteQuestion(id: number): Promise<void> {
-    await db.delete(questions).where(eq(questions.id, id));
+  async deleteQuestion(id: number, userId: number): Promise<boolean> {
+    const deleted = await db
+      .delete(questions)
+      .where(and(eq(questions.id, id), eq(questions.userId, userId)))
+      .returning({ id: questions.id });
+    return deleted.length > 0;
   }
 
   async deleteTest(testId: string, userId?: number): Promise<void> {
@@ -195,21 +201,25 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updateAttempt(id: number, update: Partial<TestAttempt>): Promise<TestAttempt | undefined> {
-    const updateData: any = { ...update };
+  async updateAttempt(id: number, userId: number, update: UpdateAttempt): Promise<TestAttempt | undefined> {
+    const updateData: Partial<TestAttempt> = { ...update };
     if (update.status === "completed") {
       updateData.completedAt = new Date();
     }
     const [updated] = await db
       .update(testAttempts)
       .set(updateData)
-      .where(eq(testAttempts.id, id))
+      .where(and(eq(testAttempts.id, id), eq(testAttempts.userId, userId)))
       .returning();
     return updated;
   }
 
-  async deleteAttempt(id: number): Promise<void> {
-    await db.delete(testAttempts).where(eq(testAttempts.id, id));
+  async deleteAttempt(id: number, userId: number): Promise<boolean> {
+    const deleted = await db
+      .delete(testAttempts)
+      .where(and(eq(testAttempts.id, id), eq(testAttempts.userId, userId)))
+      .returning({ id: testAttempts.id });
+    return deleted.length > 0;
   }
 }
 

@@ -181,7 +181,7 @@ export async function registerRoutes(
     try {
       const id = Number(req.params.id);
       const update = api.questions.update.input.parse(req.body);
-      const updated = await storage.updateQuestion(id, update);
+      const updated = await storage.updateQuestion(id, req.user!.id, update);
       if (!updated) {
         return res.status(404).json({ message: "Question not found" });
       }
@@ -193,7 +193,10 @@ export async function registerRoutes(
 
   app.delete(api.questions.delete.path, requireAuth, async (req, res) => {
     const id = Number(req.params.id);
-    await storage.deleteQuestion(id);
+    const deleted = await storage.deleteQuestion(id, req.user!.id);
+    if (!deleted) {
+      return res.status(404).json({ message: "Question not found" });
+    }
     res.status(204).send();
   });
 
@@ -243,20 +246,25 @@ export async function registerRoutes(
     try {
       const id = Number(req.params.id);
       const update = api.attempts.update.input.parse(req.body);
-      const updated = await storage.updateAttempt(id, update);
+      const updated = await storage.updateAttempt(id, req.user!.id, update);
       if (!updated) {
         return res.status(404).json({ message: "Attempt not found" });
       }
       res.json(updated);
     } catch (err) {
-      console.error("Update attempt error:", err);
+      if (!(err instanceof z.ZodError)) {
+        console.error("Update attempt error:", err);
+      }
       res.status(400).json({ message: "Validation error" });
     }
   });
 
   app.delete(api.attempts.delete.path, requireAuth, async (req, res) => {
     const id = Number(req.params.id);
-    await storage.deleteAttempt(id);
+    const deleted = await storage.deleteAttempt(id, req.user!.id);
+    if (!deleted) {
+      return res.status(404).json({ message: "Attempt not found" });
+    }
     res.status(204).send();
   });
 
