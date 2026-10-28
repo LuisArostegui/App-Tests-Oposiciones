@@ -1,6 +1,7 @@
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useRoute, useLocation, useSearch } from "wouter";
 import { useTest } from "@/hooks/use-tests";
+import { useResults } from "@/hooks/use-results";
 import { useAttempt, useCreateAttempt, useFinalizeAttempt, useUpdateAttempt } from "@/hooks/use-attempts";
 import { QuestionCard } from "@/components/QuestionCard";
 import { Button } from "@/components/ui/button";
@@ -36,7 +37,8 @@ export default function TestView() {
   const { mutateAsync: createAttempt } = useCreateAttempt();
   const { mutateAsync: updateAttemptAsync } = useUpdateAttempt();
   const { mutateAsync: finalizeAttempt, isPending: isFinalizing } = useFinalizeAttempt();
-  const { data: existingAttempt, isLoading: attemptLoading, isError: attemptError } = useAttempt(attemptIdParam ? Number(attemptIdParam) : null);
+  const { data: existingAttempt, isLoading: attemptLoading, isError: attemptError, refetch: refetchAttempt } = useAttempt(attemptIdParam ? Number(attemptIdParam) : null);
+  const { data: results, isLoading: resultsLoading, isError: resultsError, refetch: refetchResults } = useResults();
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<number, string>>({});
@@ -49,6 +51,9 @@ export default function TestView() {
   const [saveState, setSaveState] = useState<"saved" | "pending" | "saving" | "error">("saved");
   const [finalizeError, setFinalizeError] = useState(false);
   const [completedResult, setCompletedResult] = useState<Result | null>(null);
+  const [completedResultLookupError, setCompletedResultLookupError] = useState(false);
+  const [completedResultMissing, setCompletedResultMissing] = useState(false);
+  const [isRefreshingCompletedResult, setIsRefreshingCompletedResult] = useState(false);
   const resumeHandled = useRef(false);
   const saveStateRef = useRef(saveState);
   saveStateRef.current = saveState;
@@ -59,6 +64,29 @@ export default function TestView() {
   const finalizeInFlight = useRef(false);
   const historyGuardAdded = useRef(false);
   const removingHistoryGuard = useRef(false);
+  const resultLookupRefreshAttempt = useRef<number | null>(null);
+
+  const refreshCompletedResult = useCallback(async (id: number) => {
+    resultLookupRefreshAttempt.current = id;
+    setIsRefreshingCompletedResult(true);
+    try {
+      const refreshed = await refetchResults();
+      if (refreshed.isError || !refreshed.data) {
+        setCompletedResultLookupError(true);
+        return;
+      }
+
+      const result = refreshed.data.find((entry) => entry.attemptId === id);
+      setCompletedResult(result ?? null);
+      setCompletedResultMissing(!result);
+      setCompletedResultLookupError(false);
+      resumeHandled.current = true;
+    } catch {
+      setCompletedResultLookupError(true);
+    } finally {
+      setIsRefreshingCompletedResult(false);
+    }
+  }, [refetchResults]);
 
   // Handle failed attempt load - clear URL param and show error
   useEffect(() => {
@@ -78,7 +106,33 @@ export default function TestView() {
 
   // Resume from existing attempt
   useEffect(() => {
-    if (existingAttempt && questions && !resumeHandled.current) {
+    if (!existingAttempt || resumeHandled.current) return;
+
+    if (existingAttempt.status === "completed") {
+      if (resultsLoading) return;
+      setAttemptId(existingAttempt.id);
+      setAnswers(existingAttempt.answers as Record<number, string> || {});
+      setIsStarted(true);
+      setIsFinished(true);
+      if (resultsError || !results) {
+        setCompletedResultLookupError(true);
+        return;
+      }
+
+      const result = results.find((entry) => entry.attemptId === existingAttempt.id);
+      if (!result) {
+        if (resultLookupRefreshAttempt.current !== existingAttempt.id) void refreshCompletedResult(existingAttempt.id);
+        return;
+      }
+
+      resumeHandled.current = true;
+      setCompletedResultLookupError(false);
+      setCompletedResult(result ?? null);
+      setCompletedResultMissing(false);
+      return;
+    }
+
+    if (questions && !resumeHandled.current) {
       resumeHandled.current = true;
       const order = existingAttempt.questionOrder as number[];
       const orderedQuestions = order
@@ -104,7 +158,7 @@ export default function TestView() {
       setAttemptId(existingAttempt.id);
       setIsStarted(true);
     }
-  }, [existingAttempt, questions, toast, setLocation, testId]);
+  }, [existingAttempt, questions, results, resultsLoading, resultsError, refreshCompletedResult, toast, setLocation, testId]);
 
   // Initialize questions when not resuming
   useEffect(() => {
@@ -193,7 +247,8 @@ export default function TestView() {
     setLocation(path);
   };
 
-  const isLoadingState = isLoading || (attemptIdParam && attemptLoading && !attemptLoadFailed);
+  const isLoadingState = isLoading || (attemptIdParam && attemptLoading && !attemptLoadFailed)
+    || (existingAttempt?.status === "completed" && resultsLoading) || isRefreshingCompletedResult;
   
   if (isLoadingState) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -204,7 +259,7 @@ export default function TestView() {
     </div>
   );
 
-  if (!questions || questions.length === 0) return (
+  if ((!questions || questions.length === 0) && existingAttempt?.status !== "completed") return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4">
       <h2 className="text-2xl font-bold mb-4">Test No Encontrado</h2>
       <Button onClick={() => setLocation("/")}>Volver al Inicio</Button>
@@ -212,7 +267,7 @@ export default function TestView() {
   );
 
   // Safety check - if activeQuestions is empty but we have questions, initialize
-  if (activeQuestions.length === 0 && questions.length > 0) {
+  if (!isFinished && questions && activeQuestions.length === 0 && questions.length > 0) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -275,8 +330,18 @@ export default function TestView() {
       await removeHistoryGuard();
       setIsFinished(true);
     } catch {
-      setSaveState("error");
-      setFinalizeError(true);
+      const refreshedAttempt = await refetchAttempt();
+      if (refreshedAttempt.data?.status === "completed") {
+        setAttemptId(refreshedAttempt.data.id);
+        setAnswers(refreshedAttempt.data.answers as Record<number, string> || {});
+        setIsStarted(true);
+        setIsFinished(true);
+        setSaveState("saved");
+        await refreshCompletedResult(refreshedAttempt.data.id);
+      } else {
+        setSaveState("error");
+        setFinalizeError(true);
+      }
     } finally {
       finalizeInFlight.current = false;
     }
@@ -318,7 +383,7 @@ export default function TestView() {
           <Card className="p-8 shadow-xl">
             <div className="text-center mb-8 space-y-2">
               <h1 className="text-3xl font-display font-bold">{testId.replace('.json', '')}</h1>
-              <p className="text-muted-foreground">{questions.length} Preguntas</p>
+              <p className="text-muted-foreground">{questions?.length ?? 0} Preguntas</p>
             </div>
             
             <div className="space-y-6">
@@ -346,6 +411,38 @@ export default function TestView() {
 
   // Result Screen
   if (isFinished) {
+    if (completedResultLookupError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4 bg-muted/20">
+          <Card className="max-w-md w-full p-8 text-center space-y-5">
+            <h2 className="text-2xl font-bold">No se pudo recuperar el resultado</h2>
+            <p className="text-muted-foreground">El intento está finalizado y permanece bloqueado. Comprueba tu conexión e inténtalo de nuevo.</p>
+            <div className="flex justify-center gap-3">
+              <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-home">Inicio</Button>
+              <Button onClick={() => { if (attemptId) void refreshCompletedResult(attemptId); }} data-testid="button-retry-result">Reintentar</Button>
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
+    if (completedResultMissing || !completedResult) {
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4 bg-muted/20">
+          <Card className="max-w-md w-full p-8 text-center space-y-5">
+            <h2 className="text-2xl font-bold">Resultado no disponible</h2>
+            <p className="text-muted-foreground" data-testid="completed-result-unavailable">
+              Este intento finalizado no tiene un resultado asociado. Puede ser un intento histórico anterior al registro de resultados enlazados; no recalculamos la puntuación para evitar mostrar un resultado distinto al confirmado.
+            </p>
+            <div className="flex justify-center gap-3">
+              <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-home">Inicio</Button>
+              <Button onClick={() => setLocation("/results")} data-testid="button-view-history">Ver Historial</Button>
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
     const score = completedResult?.score ?? 0;
     const isPass = score >= 50;
 

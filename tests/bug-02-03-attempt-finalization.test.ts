@@ -237,7 +237,7 @@ test("BUG-03: a database failure during result insertion rolls back attempt comp
   }
 });
 
-test("BUG-03: the migration preserves historical results and enforces new attempt links", async () => {
+test("BUG-03: the migration is atomic, preserves historical results, and enforces new attempt links", async () => {
   const client = await pool.connect();
   const schemaName = `bug0203_migration_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   try {
@@ -258,6 +258,20 @@ test("BUG-03: the migration preserves historical results and enforces new attemp
     await client.query("INSERT INTO results (test_id, score, correct_count, total_questions) VALUES ('legacy.json', 80, 4, 5)");
 
     const migration = await readFile(fileURLToPath(new URL("../migrations/20261028_attempt_result_link.sql", import.meta.url)), "utf8");
+    assert.match(migration, /^BEGIN;\s*$/m);
+    assert.match(migration, /\nCOMMIT;\s*$/);
+    await client.query("CREATE INDEX results_attempt_id_unique ON test_attempts (id)");
+    await assert.rejects(client.query(migration), /already exists/i);
+    await client.query("ROLLBACK");
+    const rolledBackColumn = await client.query(`
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'results'
+        AND column_name = 'attempt_id'
+    `);
+    assert.equal(rolledBackColumn.rowCount, 0);
+    await client.query("DROP INDEX results_attempt_id_unique");
     await client.query(migration);
     const legacy = await client.query("SELECT attempt_id FROM results WHERE test_id = 'legacy.json'");
     assert.equal(legacy.rows[0].attempt_id, null);

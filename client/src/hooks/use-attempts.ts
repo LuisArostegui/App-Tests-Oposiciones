@@ -10,7 +10,9 @@ const pendingAttemptUpdates = new Map<number, Map<string, Promise<unknown>>>();
 
 export async function enqueueAttemptUpdate<T>(id: number, update: () => Promise<T>, dedupeKey?: string): Promise<T> {
   const pending = dedupeKey ? pendingAttemptUpdates.get(id)?.get(dedupeKey) : undefined;
-  if (pending) return pending as Promise<T>;
+  // Coalesce only the latest queued operation. An older matching snapshot may
+  // have a different write queued after it and must not leapfrog that write.
+  if (pending && attemptUpdateQueues.get(id) === pending) return pending as Promise<T>;
 
   const sessionEpoch = capturePrivateSessionEpoch();
   const previous = attemptUpdateQueues.get(id) ?? Promise.resolve();

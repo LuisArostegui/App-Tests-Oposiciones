@@ -1,5 +1,7 @@
 -- Add a nullable, unique relationship for results created by attempt finalization.
 -- Existing historical result rows remain unlinked and are not backfilled.
+BEGIN;
+
 ALTER TABLE results
   ADD COLUMN attempt_id integer;
 
@@ -9,3 +11,5 @@ ALTER TABLE results
 
 ALTER TABLE results
   ADD CONSTRAINT results_attempt_id_unique UNIQUE (attempt_id);
+
+COMMIT;
