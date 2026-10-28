@@ -378,8 +378,14 @@ export default function TestView() {
       return;
     }
 
+    const isCurrentAttemptActive = isStarted && attemptId === existingAttempt.id;
     resumeHandled.current = true;
     setActiveQuestions(orderedQuestions);
+    if (!isCurrentAttemptActive) {
+      setAttemptId(existingAttempt.id);
+      setAnswers(existingAttempt.answers as Record<number, string> || {});
+      setCurrentIndex(Math.min(existingAttempt.currentIndex, orderedQuestions.length - 1));
+    }
     setIsStarted(true);
     setAttemptQuestionConflict(false);
   };

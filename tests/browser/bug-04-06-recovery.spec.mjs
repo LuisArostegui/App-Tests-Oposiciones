@@ -106,6 +106,10 @@ test("an old attempt URL after test rename redirects and resumes the same attemp
 test("retrying question lookup keeps the conflict until every attempt question is available", async ({ page, request }) => {
   await login(page, request);
   await startAttempt(page);
+  await page.getByRole("button", { name: "A Correcta" }).click();
+  await expect.poll(async () => (await (await request.get("/__e2e/attempt-state")).json()).attemptState.answers["11"]).toBe("A");
+  await page.getByTestId("button-next").click();
+  await expect.poll(async () => (await (await request.get("/__e2e/attempt-state")).json()).attemptState.currentIndex).toBe(1);
   const attemptUrl = page.url();
   await request.post("/__e2e/omit-attempt-question");
 
@@ -118,12 +122,16 @@ test("retrying question lookup keeps the conflict until every attempt question i
 
   await request.post("/__e2e/restore-attempt-question");
   await page.getByTestId("button-retry-questions").click();
-  await expect(page.getByText("Pregunta de prueba uno")).toBeVisible();
+  await expect(page.getByText("Pregunta de prueba dos")).toBeVisible();
   await expect(page.getByTestId("attempt-question-conflict")).toHaveCount(0);
   await expect(page).toHaveURL(attemptUrl);
+  await expect(page.getByTestId("button-start-test")).toHaveCount(0);
+  await page.getByTestId("button-finish").click();
+  await expect.poll(async () => (await (await request.get("/__e2e/attempt-state")).json()).attemptState.status).toBe("completed");
   const state = await (await request.get("/__e2e/attempt-state")).json();
   expect(state.attemptState.id).toBe(808);
-  expect(state.attemptState.status).toBe("in_progress");
+  expect(state.attemptState.status).toBe("completed");
+  expect(state.finalizationPayloads).toEqual([{ answers: { "11": "A" } }]);
 });
 
 test("finishing before autosave keeps local answers and question index after conflict retry", async ({ page, request }) => {
