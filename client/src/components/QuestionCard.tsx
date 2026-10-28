@@ -8,6 +8,7 @@ interface QuestionCardProps {
   selectedAnswer: string | null;
   onSelectAnswer: (key: string) => void;
   showFeedback: boolean;
+  disabled?: boolean;
   compact?: boolean;
 }
 
@@ -16,6 +17,7 @@ export function QuestionCard({
   selectedAnswer, 
   onSelectAnswer, 
   showFeedback,
+  disabled = false,
   compact = false
 }: QuestionCardProps) {
   const answers = question.answers as AnswerMap;
@@ -67,8 +69,8 @@ export function QuestionCard({
                 scale: { duration: 0.3, ease: "easeOut" },
                 x: { duration: 0.4, ease: "easeInOut" }
               }}
-              onClick={() => !showFeedback && onSelectAnswer(key)}
-              disabled={showFeedback}
+              onClick={() => !showFeedback && !disabled && onSelectAnswer(key)}
+              disabled={showFeedback || disabled}
               className={cn(
                 "w-full text-left rounded-xl border-2 transition-all duration-200 relative group flex items-start gap-2 md:gap-4",
                 compact ? "p-2.5 md:p-4" : "p-4",

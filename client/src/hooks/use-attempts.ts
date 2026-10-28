@@ -3,10 +3,17 @@ import { api, buildUrl } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch, capturePrivateSessionEpoch, isPrivateSessionEpochCurrent } from "@/lib/queryClient";
 import { usePrivateMutation } from "@/hooks/use-private-mutation";
+import type { FinalizeAttemptInput } from "@shared/schema";
 
 const attemptUpdateQueues = new Map<number, Promise<unknown>>();
+const pendingAttemptUpdates = new Map<number, Map<string, Promise<unknown>>>();
 
-export async function enqueueAttemptUpdate<T>(id: number, update: () => Promise<T>): Promise<T> {
+export async function enqueueAttemptUpdate<T>(id: number, update: () => Promise<T>, dedupeKey?: string): Promise<T> {
+  const pending = dedupeKey ? pendingAttemptUpdates.get(id)?.get(dedupeKey) : undefined;
+  // Coalesce only the latest queued operation. An older matching snapshot may
+  // have a different write queued after it and must not leapfrog that write.
+  if (pending && attemptUpdateQueues.get(id) === pending) return pending as Promise<T>;
+
   const sessionEpoch = capturePrivateSessionEpoch();
   const previous = attemptUpdateQueues.get(id) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(() => {
@@ -14,11 +21,29 @@ export async function enqueueAttemptUpdate<T>(id: number, update: () => Promise<
     return update();
   });
   attemptUpdateQueues.set(id, current);
+  if (dedupeKey) {
+    const requests = pendingAttemptUpdates.get(id) ?? new Map<string, Promise<unknown>>();
+    requests.set(dedupeKey, current);
+    pendingAttemptUpdates.set(id, requests);
+  }
   try {
     return await current;
   } finally {
     if (attemptUpdateQueues.get(id) === current) attemptUpdateQueues.delete(id);
+    if (dedupeKey) {
+      const requests = pendingAttemptUpdates.get(id);
+      if (requests?.get(dedupeKey) === current) requests.delete(dedupeKey);
+      if (requests?.size === 0) pendingAttemptUpdates.delete(id);
+    }
   }
+}
+
+function serializeAttemptSnapshot(value: object): string {
+  const snapshot = value as { currentIndex?: number; answers?: Record<string, string> };
+  const answers = snapshot.answers
+    ? Object.fromEntries(Object.entries(snapshot.answers).sort(([first], [second]) => first.localeCompare(second)))
+    : undefined;
+  return JSON.stringify({ currentIndex: snapshot.currentIndex, answers });
 }
 
 export function useAttempts() {
@@ -69,7 +94,7 @@ export function useUpdateAttempt() {
   const queryClient = useQueryClient();
 
   return usePrivateMutation({
-    mutationFn: async ({ id, ...updates }: { id: number; currentIndex?: number; answers?: Record<string, string>; status?: string; correctCount?: number; score?: number }) => {
+    mutationFn: async ({ id, ...updates }: { id: number; currentIndex?: number; answers?: Record<string, string> }) => {
       const url = buildUrl(api.attempts.update.path, { id });
       return enqueueAttemptUpdate(id, async () => {
         const res = await apiFetch(url, {
@@ -79,11 +104,35 @@ export function useUpdateAttempt() {
         });
         if (!res.ok) throw new Error("Failed to update attempt");
         return api.attempts.update.responses[200].parse(await res.json());
-      });
+      }, `update:${serializeAttemptSnapshot(updates)}`);
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: [api.attempts.list.path] });
       queryClient.invalidateQueries({ queryKey: [api.attempts.get.path, variables.id] });
+    },
+  });
+}
+
+export function useFinalizeAttempt() {
+  const queryClient = useQueryClient();
+
+  return usePrivateMutation({
+    mutationFn: async ({ id, ...input }: { id: number } & FinalizeAttemptInput) => {
+      const url = buildUrl(api.attempts.finalize.path, { id });
+      return enqueueAttemptUpdate(id, async () => {
+        const res = await apiFetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        if (!res.ok) throw new Error("Failed to finalize attempt");
+        return api.attempts.finalize.responses[200].parse(await res.json());
+      }, `finalize:${serializeAttemptSnapshot(input)}`);
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: [api.attempts.list.path] });
+      queryClient.invalidateQueries({ queryKey: [api.attempts.get.path, variables.id] });
+      queryClient.invalidateQueries({ queryKey: [api.results.list.path] });
     },
   });
 }

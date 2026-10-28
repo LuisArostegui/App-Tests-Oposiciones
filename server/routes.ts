@@ -225,17 +225,6 @@ export async function registerRoutes(
     res.json(results);
   }));
 
-  app.post(api.results.create.path, requireAuth, asyncHandler(async (req, res) => {
-    try {
-      const input = api.results.create.input.parse(req.body);
-      const result = await storage.createResult(req.user!.id, input);
-      res.status(201).json(result);
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
-      throw err;
-    }
-  }));
-
   // === Attempts (Protected) ===
   app.get(api.attempts.list.path, requireAuth, asyncHandler(async (req, res) => {
     const attempts = await storage.getAttempts(req.user!.id);
@@ -273,9 +262,35 @@ export async function registerRoutes(
       const update = api.attempts.update.input.parse(req.body);
       const updated = await storage.updateAttempt(id, req.user!.id, update);
       if (!updated) {
+        const existingAttempt = await storage.getAttempt(id, req.user!.id);
+        if (existingAttempt?.status === "completed") {
+          return res.status(409).json({ message: "El intento ya está finalizado" });
+        }
         return res.status(404).json({ message: "Attempt not found" });
       }
       res.json(updated);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      throw err;
+    }
+  }));
+
+  app.post(api.attempts.finalize.path, requireAuth, asyncHandler(async (req, res) => {
+    try {
+      const id = parsePositiveId(req.params.id);
+      if (id === undefined) return res.status(400).json({ message: "Solicitud no válida" });
+      const input = api.attempts.finalize.input.parse(req.body);
+      const outcome = await storage.finalizeAttempt(id, req.user!.id, input);
+      if (outcome.status === "not_found") return res.status(404).json({ message: "Attempt not found" });
+      if (outcome.status !== "completed") {
+        const message = outcome.status === "missing_questions"
+          ? "Faltan preguntas del intento; no se ha guardado ningún resultado"
+          : outcome.status === "invalid_answers"
+            ? "Las respuestas no corresponden con las preguntas del intento"
+            : "El intento ya está finalizado o no admite estos cambios";
+        return res.status(409).json({ message });
+      }
+      res.json(outcome.result);
     } catch (err) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
       throw err;
