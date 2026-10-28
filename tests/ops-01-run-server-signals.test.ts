@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
+import { spawn } from "node:child_process";
 import test from "node:test";
 import { forwardTerminationSignals } from "../script/forward-termination-signals.mjs";
 
@@ -49,4 +50,27 @@ test("OPS-01: forwards SIGINT and leaves an already exited child alone", () => {
   forwardTerminationSignals(exitedChild, parent);
   parent.emit("SIGTERM");
   assert.deepEqual(forwarded, ["SIGINT"]);
+});
+
+test("OPS-01: a real child handles the forwarded SIGTERM and exits", {
+  skip: process.platform === "win32",
+  timeout: 5_000,
+}, async (context) => {
+  const child = spawn(process.execPath, ["-e", `
+    process.on("SIGTERM", () => process.exit(0));
+    process.stdout.write("ready\\n");
+    setInterval(() => {}, 1_000);
+  `], { stdio: ["ignore", "pipe", "inherit"] });
+  context.after(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  });
+
+  await once(child.stdout!, "data");
+  const parent = new EventEmitter();
+  forwardTerminationSignals(child, parent);
+  parent.emit("SIGTERM");
+
+  const [exitCode, exitSignal] = await once(child, "exit") as [number | null, NodeJS.Signals | null];
+  assert.equal(exitCode, 0);
+  assert.equal(exitSignal, null);
 });
