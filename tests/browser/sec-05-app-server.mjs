@@ -22,6 +22,17 @@ let delayedTestsUser = null;
 const releaseDelayedTests = new Set();
 let delayLogout = false;
 let releaseDelayedLogout;
+let attemptState = null;
+let failNextAttemptSave = false;
+let delayAttemptSave = false;
+let releaseAttemptSave;
+let delayAttemptFinalize = false;
+let releaseAttemptFinalize;
+let finalizationPayloads = [];
+const attemptQuestions = [
+  { id: 11, questionText: "Pregunta de prueba uno", answers: { A: "Correcta", B: "Incorrecta" }, correctAnswer: "A" },
+  { id: 12, questionText: "Pregunta de prueba dos", answers: { A: "Incorrecta", B: "Correcta" }, correctAnswer: "B" },
+];
 
 function resetFixture() {
   expired = false;
@@ -31,6 +42,15 @@ function resetFixture() {
   delayLogout = false;
   releaseDelayedLogout?.();
   releaseDelayedLogout = undefined;
+  attemptState = null;
+  failNextAttemptSave = false;
+  delayAttemptSave = false;
+  releaseAttemptSave?.();
+  releaseAttemptSave = undefined;
+  delayAttemptFinalize = false;
+  releaseAttemptFinalize?.();
+  releaseAttemptFinalize = undefined;
+  finalizationPayloads = [];
 }
 
 function readJson(request) {
@@ -85,6 +105,33 @@ createServer(async (request, response) => {
     delayLogout = false;
     return response.writeHead(204).end();
   }
+  if (url.pathname === "/__e2e/fail-next-attempt-save" && request.method === "POST") {
+    failNextAttemptSave = true;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/delay-attempt-save" && request.method === "POST") {
+    delayAttemptSave = true;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/release-attempt-save" && request.method === "POST") {
+    releaseAttemptSave?.();
+    releaseAttemptSave = undefined;
+    delayAttemptSave = false;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/delay-attempt-finalize" && request.method === "POST") {
+    delayAttemptFinalize = true;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/release-attempt-finalize" && request.method === "POST") {
+    releaseAttemptFinalize?.();
+    releaseAttemptFinalize = undefined;
+    delayAttemptFinalize = false;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/attempt-state" && request.method === "GET") {
+    return respondJson(response, 200, { attemptState, finalizationPayloads });
+  }
   if (url.pathname === "/api/auth/me") {
     const user = expired ? undefined : users[sid];
     return user ? respondJson(response, 200, { id: user.id, username: user.username }) : respondJson(response, 401, { message: "No autenticado" });
@@ -110,9 +157,57 @@ createServer(async (request, response) => {
     }
     return user ? respondJson(response, 200, user.tests) : respondJson(response, 401, { message: "No autenticado" });
   }
-  if (url.pathname === "/api/attempts") {
+  if (url.pathname.startsWith("/api/tests/")) {
+    const user = expired ? undefined : users[sid];
+    const testId = decodeURIComponent(url.pathname.slice("/api/tests/".length));
+    if (!user) return respondJson(response, 401, { message: "No autenticado" });
+    const ownedTest = user.tests.find((test) => test.id === testId);
+    return ownedTest
+      ? respondJson(response, 200, attemptQuestions.map((question) => ({ ...question, testId, category: ownedTest.category, userId: user.id })))
+      : respondJson(response, 404, { message: "Test not found" });
+  }
+  if (url.pathname === "/api/attempts" && request.method === "GET") {
     const user = expired ? undefined : users[sid];
     return user ? respondJson(response, 200, []) : respondJson(response, 401, { message: "No autenticado" });
+  }
+  if (url.pathname === "/api/attempts" && request.method === "POST") {
+    const user = expired ? undefined : users[sid];
+    if (!user) return respondJson(response, 401, { message: "No autenticado" });
+    const body = await readJson(request);
+    attemptState = { id: 808, ...body, answers: {}, currentIndex: 0, status: "in_progress", userId: user.id };
+    return respondJson(response, 201, attemptState);
+  }
+  if (url.pathname === "/api/attempts/808" && request.method === "GET") {
+    const user = expired ? undefined : users[sid];
+    return user && attemptState?.userId === user.id
+      ? respondJson(response, 200, attemptState)
+      : respondJson(response, 404, { message: "Attempt not found" });
+  }
+  if (url.pathname === "/api/attempts/808" && request.method === "PUT") {
+    const user = expired ? undefined : users[sid];
+    if (!user) return respondJson(response, 401, { message: "No autenticado" });
+    if (failNextAttemptSave) {
+      failNextAttemptSave = false;
+      return respondJson(response, 503, { message: "Error de guardado de prueba" });
+    }
+    if (delayAttemptSave) await new Promise((resolve) => { releaseAttemptSave = resolve; });
+    attemptState = { ...attemptState, ...await readJson(request) };
+    return respondJson(response, 200, attemptState);
+  }
+  if (url.pathname === "/api/attempts/808/finalize" && request.method === "POST") {
+    const user = expired ? undefined : users[sid];
+    if (!user) return respondJson(response, 401, { message: "No autenticado" });
+    const body = await readJson(request);
+    if (delayAttemptFinalize) await new Promise((resolve) => { releaseAttemptFinalize = resolve; });
+    finalizationPayloads.push(body);
+    const correctCount = attemptQuestions.filter((question) => body.answers?.[question.id] === question.correctAnswer).length;
+    attemptState = { ...attemptState, answers: body.answers, status: "completed", correctCount, score: Math.round(correctCount / attemptQuestions.length * 100) };
+    const result = {
+      id: 9001, attemptId: 808, testId: attemptState.testId, correctCount,
+      totalQuestions: attemptQuestions.length, score: attemptState.score,
+      completedAt: "2026-10-28T00:00:00.000Z", userId: user.id,
+    };
+    return respondJson(response, 200, result);
   }
   if (url.pathname.startsWith("/api/")) return respondJson(response, 401, { message: "No autenticado" });
 

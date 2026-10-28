@@ -23,17 +23,6 @@ export const questions = pgTable("questions", {
   userId: integer("user_id"),
 });
 
-// Stores historical results (completed tests)
-export const results = pgTable("results", {
-  id: serial("id").primaryKey(),
-  testId: text("test_id").notNull(),
-  score: integer("score").notNull(),
-  correctCount: integer("correct_count").notNull(),
-  totalQuestions: integer("total_questions").notNull(),
-  completedAt: timestamp("completed_at").defaultNow(),
-  userId: integer("user_id"),
-});
-
 // Stores test attempts (in-progress or completed)
 export const testAttempts = pgTable("test_attempts", {
   id: serial("id").primaryKey(),
@@ -48,6 +37,18 @@ export const testAttempts = pgTable("test_attempts", {
   startedAt: timestamp("started_at").defaultNow(),
   completedAt: timestamp("completed_at"),
   userId: integer("user_id"),
+});
+
+// Stores historical results (completed tests). Legacy results have no attempt link.
+export const results = pgTable("results", {
+  id: serial("id").primaryKey(),
+  testId: text("test_id").notNull(),
+  score: integer("score").notNull(),
+  correctCount: integer("correct_count").notNull(),
+  totalQuestions: integer("total_questions").notNull(),
+  completedAt: timestamp("completed_at").defaultNow(),
+  userId: integer("user_id"),
+  attemptId: integer("attempt_id").unique().references(() => testAttempts.id, { onDelete: "set null" }),
 });
 
 // Session table for connect-pg-simple
@@ -72,11 +73,12 @@ export const updateQuestionSchema = z.object({
 }).strict();
 
 export const updateAttemptSchema = z.object({
-  currentIndex: z.number().optional(),
+  currentIndex: z.number().int().nonnegative().optional(),
   answers: z.record(z.string()).optional(),
-  status: z.enum(["in_progress", "completed"]).optional(),
-  correctCount: z.number().optional(),
-  score: z.number().optional(),
+}).strict();
+
+export const finalizeAttemptSchema = z.object({
+  answers: z.record(z.string()),
 }).strict();
 
 // Login schema (same as insert but for clarity)
@@ -102,6 +104,7 @@ export type InsertResult = z.infer<typeof insertResultSchema>;
 export type TestAttempt = typeof testAttempts.$inferSelect;
 export type InsertAttempt = z.infer<typeof insertAttemptSchema>;
 export type UpdateAttempt = z.infer<typeof updateAttemptSchema>;
+export type FinalizeAttemptInput = z.infer<typeof finalizeAttemptSchema>;
 
 // Helper for the frontend to know what answers look like
 export type AnswerMap = Record<string, string>;

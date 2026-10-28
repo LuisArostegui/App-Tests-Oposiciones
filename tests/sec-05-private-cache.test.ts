@@ -322,6 +322,22 @@ test("SEC-05: an older attempt autosave cannot finish after and overwrite the ex
   assert.deepEqual(order, ["autosave started", "autosave finished", "explicit save finished"]);
 });
 
+test("SEC-05: duplicate writes for the same attempt snapshot share one pending request", async () => {
+  let release!: () => void;
+  let calls = 0;
+  const update = () => {
+    calls++;
+    return new Promise<void>((resolve) => { release = resolve; });
+  };
+  const first = enqueueAttemptUpdate(503, update, "update:{\"currentIndex\":1}");
+  const duplicate = enqueueAttemptUpdate(503, update, "update:{\"currentIndex\":1}");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+  release();
+  await Promise.all([first, duplicate]);
+  assert.equal(calls, 1);
+});
+
 test("SEC-05: queued attempt writes from the old session do not start after a session change", async () => {
   let finishFirst!: () => void;
   let staleWriteStarted = false;

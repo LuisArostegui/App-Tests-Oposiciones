@@ -32,7 +32,6 @@ let otherAttemptId: number;
 let testSuffix: string;
 const creationQuestionIds: number[] = [];
 const creationAttemptIds: number[] = [];
-const creationResultIds: number[] = [];
 let ownerSecondQuestionId: number;
 let ownerOtherTestQuestionId: number;
 let foreignQuestionId: number;
@@ -111,7 +110,6 @@ after(async () => {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
   for (const id of creationAttemptIds) await db.delete(schema.testAttempts).where(eq(schema.testAttempts.id, id));
-  for (const id of creationResultIds) await db.delete(schema.results).where(eq(schema.results.id, id));
   for (const id of creationQuestionIds) await db.delete(schema.questions).where(eq(schema.questions.id, id));
   if (questionId) await db.delete(schema.questions).where(eq(schema.questions.id, questionId));
   if (attemptId) await db.delete(schema.testAttempts).where(eq(schema.testAttempts.id, attemptId));
@@ -299,7 +297,7 @@ test("SEC-01: client cannot supply the persisted question count", async () => {
   assert.deepEqual(afterAttempts, beforeAttempts);
 });
 
-test("SEC-01: question and result creation reject client-supplied owners and persist the session owner", async () => {
+test("SEC-01: question creation rejects client-supplied owners and result creation is unavailable", async () => {
   const questionTestId = `sec01-created-question-${testSuffix}.json`;
   const questionPayload = {
     testId: questionTestId,
@@ -343,27 +341,25 @@ test("SEC-01: question and result creation reject client-supplied owners and per
   creationQuestionIds.push(persistedImport.id);
   assert.equal(persistedImport.userId, ownerId);
 
-  const resultPayload = { testId: questionTestId, score: 80, correctCount: 4, totalQuestions: 5 };
   const resultsBefore = await db.select().from(schema.results)
     .where(eq(schema.results.testId, questionTestId)).orderBy(schema.results.id);
   const spoofedResult = await request("/api/results", {
-    method: "POST", body: JSON.stringify({ ...resultPayload, userId: otherUserId }),
+    method: "POST", body: JSON.stringify({ testId: questionTestId, score: 80, correctCount: 4, totalQuestions: 5, userId: otherUserId }),
   }, ownerId);
-  assert.equal(spoofedResult.status, 400);
+  assert.equal(spoofedResult.status, 404);
   assert.deepEqual(
     await db.select().from(schema.results).where(eq(schema.results.testId, questionTestId)).orderBy(schema.results.id),
     resultsBefore,
   );
 
   const createdResultResponse = await request("/api/results", {
-    method: "POST", body: JSON.stringify(resultPayload),
+    method: "POST", body: JSON.stringify({ testId: questionTestId, score: 80, correctCount: 4, totalQuestions: 5 }),
   }, ownerId);
-  assert.equal(createdResultResponse.status, 201);
-  const createdResult: { id: number; userId: number } = await createdResultResponse.json();
-  creationResultIds.push(createdResult.id);
-  assert.equal(createdResult.userId, ownerId);
-  const [persistedResult] = await db.select().from(schema.results).where(eq(schema.results.id, createdResult.id));
-  assert.equal(persistedResult?.userId, ownerId);
+  assert.equal(createdResultResponse.status, 404);
+  assert.deepEqual(
+    await db.select().from(schema.results).where(eq(schema.results.testId, questionTestId)).orderBy(schema.results.id),
+    resultsBefore,
+  );
 });
 
 for (const invalid of [

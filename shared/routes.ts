@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { insertQuestionSchema, insertResultSchema, insertAttemptSchema, updateQuestionSchema, updateAttemptSchema, questions, results, testAttempts } from './schema';
+import { insertQuestionSchema, insertAttemptSchema, updateQuestionSchema, updateAttemptSchema, finalizeAttemptSchema, questions, results, testAttempts } from './schema';
 
 export const errorSchemas = {
   validation: z.object({
@@ -7,6 +7,9 @@ export const errorSchemas = {
     field: z.string().optional(),
   }),
   notFound: z.object({
+    message: z.string(),
+  }),
+  conflict: z.object({
     message: z.string(),
   }),
   internal: z.object({
@@ -105,14 +108,6 @@ export const api = {
         200: z.array(z.custom<typeof results.$inferSelect>()),
       },
     },
-    create: {
-      method: 'POST' as const,
-      path: '/api/results',
-      input: insertResultSchema,
-      responses: {
-        201: z.custom<typeof results.$inferSelect>(),
-      },
-    },
   },
   attempts: {
     list: {
@@ -148,6 +143,17 @@ export const api = {
       responses: {
         200: z.custom<typeof testAttempts.$inferSelect>(),
         404: errorSchemas.notFound,
+        409: errorSchemas.conflict,
+      },
+    },
+    finalize: {
+      method: 'POST' as const,
+      path: '/api/attempts/:id/finalize',
+      input: finalizeAttemptSchema,
+      responses: {
+        200: z.custom<typeof results.$inferSelect>(),
+        404: errorSchemas.notFound,
+        409: errorSchemas.conflict,
       },
     },
     delete: {

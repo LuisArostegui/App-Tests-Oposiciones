@@ -13,8 +13,17 @@ import {
   type User,
   type InsertUser,
   type UpdateAttempt,
+  type FinalizeAttemptInput,
 } from "@shared/schema";
 import { eq, desc, sql, and, inArray } from "drizzle-orm";
+
+export type FinalizeAttemptOutcome =
+  | { status: "completed"; result: Result }
+  | { status: "not_found" | "conflict" | "missing_questions" | "invalid_answers" };
+
+function serializeAnswers(answers: Record<string, string>): string {
+  return JSON.stringify(Object.fromEntries(Object.entries(answers).sort(([first], [second]) => first.localeCompare(second))));
+}
 
 export interface IStorage {
   // Users
@@ -41,6 +50,7 @@ export interface IStorage {
   getAttempt(id: number, userId: number): Promise<TestAttempt | undefined>;
   createAttempt(attempt: { testId: string; questionOrder: number[]; userId: number }): Promise<TestAttempt | undefined>;
   updateAttempt(id: number, userId: number, update: UpdateAttempt): Promise<TestAttempt | undefined>;
+  finalizeAttempt(id: number, userId: number, input: FinalizeAttemptInput): Promise<FinalizeAttemptOutcome>;
   deleteAttempt(id: number, userId: number): Promise<boolean>;
 }
 
@@ -183,16 +193,91 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateAttempt(id: number, userId: number, update: UpdateAttempt): Promise<TestAttempt | undefined> {
-    const updateData: Partial<TestAttempt> = { ...update };
-    if (update.status === "completed") {
-      updateData.completedAt = new Date();
-    }
     const [updated] = await db
       .update(testAttempts)
-      .set(updateData)
-      .where(and(eq(testAttempts.id, id), eq(testAttempts.userId, userId)))
+      .set(update)
+      .where(and(
+        eq(testAttempts.id, id),
+        eq(testAttempts.userId, userId),
+        eq(testAttempts.status, "in_progress"),
+      ))
       .returning();
     return updated;
+  }
+
+  async finalizeAttempt(id: number, userId: number, input: FinalizeAttemptInput): Promise<FinalizeAttemptOutcome> {
+    return db.transaction(async (tx): Promise<FinalizeAttemptOutcome> => {
+      const [attempt] = await tx.select().from(testAttempts).where(and(
+        eq(testAttempts.id, id),
+        eq(testAttempts.userId, userId),
+      )).for("update");
+      if (!attempt) return { status: "not_found" };
+
+      if (attempt.status === "completed") {
+        if (serializeAnswers(attempt.answers as Record<string, string>) !== serializeAnswers(input.answers)) {
+          return { status: "conflict" };
+        }
+        const [existingResult] = await tx.select().from(results).where(and(
+          eq(results.attemptId, attempt.id),
+          eq(results.userId, userId),
+        ));
+        return existingResult ? { status: "completed", result: existingResult } : { status: "conflict" };
+      }
+      if (attempt.status !== "in_progress") return { status: "conflict" };
+
+      const questionOrder = attempt.questionOrder as number[];
+      if (questionOrder.length === 0 || new Set(questionOrder).size !== questionOrder.length) {
+        return { status: "missing_questions" };
+      }
+
+      const attemptQuestions = await tx.select().from(questions).where(and(
+        eq(questions.testId, attempt.testId),
+        eq(questions.userId, userId),
+        inArray(questions.id, questionOrder),
+      )).for("share");
+      if (attemptQuestions.length !== questionOrder.length) return { status: "missing_questions" };
+
+      const questionById = new Map(attemptQuestions.map((question) => [String(question.id), question]));
+      for (const [questionId, answer] of Object.entries(input.answers)) {
+        const question = questionById.get(questionId);
+        const options = question?.answers as Record<string, unknown> | undefined;
+        if (!question || !options || !Object.hasOwn(options, answer)) return { status: "invalid_answers" };
+      }
+      if (attemptQuestions.some((question) => {
+        const options = question.answers as Record<string, unknown> | null;
+        return !options || !Object.hasOwn(options, question.correctAnswer);
+      })) return { status: "missing_questions" };
+
+      const correctCount = attemptQuestions.reduce((count, question) => (
+        input.answers[String(question.id)] === question.correctAnswer ? count + 1 : count
+      ), 0);
+      // Scoring remains the existing rule: correct answers / attempt question count, rounded to the nearest integer percent.
+      const score = Math.round((correctCount / questionOrder.length) * 100);
+      const completedAt = new Date();
+      await tx.update(testAttempts).set({
+        answers: input.answers,
+        currentIndex: questionOrder.length - 1,
+        status: "completed",
+        correctCount,
+        score,
+        completedAt,
+      }).where(and(
+        eq(testAttempts.id, attempt.id),
+        eq(testAttempts.userId, userId),
+        eq(testAttempts.status, "in_progress"),
+      ));
+
+      const [result] = await tx.insert(results).values({
+        testId: attempt.testId,
+        score,
+        correctCount,
+        totalQuestions: questionOrder.length,
+        completedAt,
+        userId,
+        attemptId: attempt.id,
+      }).returning();
+      return { status: "completed", result };
+    });
   }
 
   async deleteAttempt(id: number, userId: number): Promise<boolean> {
