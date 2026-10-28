@@ -347,6 +347,31 @@ test("SEC-03: CSRF protects authenticated question creation and allows a same-or
   assert.equal(allowedWrite.status, 201);
   const createdQuestion = await allowedWrite.json() as { id: number };
   createdQuestionIds.push(createdQuestion.id);
+
+  const importName = `sec03-csrf-import-${suffix}.json`;
+  const forgedImportHeaders = requestHeaders(running, authenticated.cookie);
+  forgedImportHeaders.set("origin", "https://attacker.example");
+  forgedImportHeaders.set("content-type", "application/json");
+  const forgedImport = await fetch(`${running.baseUrl}/api/tests/import`, {
+    method: "POST",
+    headers: forgedImportHeaders,
+    body: "{",
+  });
+  assert.equal(forgedImport.status, 403, "CSRF rejection happens before parsing the larger import body");
+  assert.deepEqual(await db.select().from(schema.questions).where(eq(schema.questions.testId, importName)), []);
+
+  const allowedImport = await fetch(`${running.baseUrl}/api/tests/import`, {
+    method: "POST",
+    headers: sameOriginHeaders,
+    body: JSON.stringify({
+      filename: importName,
+      content: [{ pregunta: "Pregunta importada", respuestas: { A: "Correcta", B: "Incorrecta" }, respuesta_correcta: "A" }],
+    }),
+  });
+  assert.equal(allowedImport.status, 201);
+  const importedQuestions = await db.select().from(schema.questions).where(eq(schema.questions.testId, importName));
+  createdQuestionIds.push(...importedQuestions.map(row => row.id));
+  assert.equal(importedQuestions.length, 1);
 });
 
 test("SEC-03: development request logging defaults on and can be disabled for a private instance", async () => {

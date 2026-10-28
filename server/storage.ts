@@ -23,6 +23,7 @@ export type FinalizeAttemptOutcome =
 
 export type RenameTestOutcome = "renamed" | "not_found" | "name_conflict";
 export type DeleteTestOutcome = "deleted" | "not_found" | "in_progress";
+export type ImportQuestionsOutcome = "imported" | "not_found" | "name_conflict";
 
 function serializeAnswers(answers: Record<string, string>): string {
   return JSON.stringify(Object.fromEntries(Object.entries(answers).sort(([first], [second]) => first.localeCompare(second))));
@@ -38,6 +39,7 @@ export interface IStorage {
   getTests(userId: number): Promise<{ id: string; count: number; category: string | null }[]>;
   getQuestionsByTestId(testId: string, userId: number): Promise<Question[]>;
   createQuestions(userId: number, questionsList: InsertQuestion[]): Promise<void>;
+  importQuestions(userId: number, testId: string, questionsList: InsertQuestion[]): Promise<ImportQuestionsOutcome>;
   createQuestion(userId: number, question: InsertQuestion): Promise<Question>;
   updateQuestion(id: number, userId: number, question: UpdateQuestion): Promise<Question | undefined>;
   deleteQuestion(id: number, userId: number): Promise<boolean>;
@@ -103,6 +105,22 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async importQuestions(userId: number, testId: string, questionsList: InsertQuestion[]): Promise<ImportQuestionsOutcome> {
+    if (questionsList.length === 0) return "imported";
+    return db.transaction(async (tx): Promise<ImportQuestionsOutcome> => {
+      const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
+      if (!owner) return "not_found";
+
+      const [existingBank] = await tx.select({ id: questions.id }).from(questions).where(and(
+        eq(questions.testId, testId), eq(questions.userId, userId),
+      )).limit(1);
+      if (existingBank) return "name_conflict";
+
+      await tx.insert(questions).values(questionsList.map(question => ({ ...question, testId, userId })));
+      return "imported";
+    });
+  }
+
   async createQuestion(userId: number, question: InsertQuestion): Promise<Question> {
     return db.transaction(async (tx) => {
       const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
@@ -122,11 +140,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteQuestion(id: number, userId: number): Promise<boolean> {
-    const deleted = await db
-      .delete(questions)
-      .where(and(eq(questions.id, id), eq(questions.userId, userId)))
-      .returning({ id: questions.id });
-    return deleted.length > 0;
+    return db.transaction(async (tx) => {
+      const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
+      if (!owner) return false;
+      const deleted = await tx.delete(questions).where(and(
+        eq(questions.id, id), eq(questions.userId, userId),
+      )).returning({ id: questions.id });
+      return deleted.length > 0;
+    });
   }
 
   async deleteTest(testId: string, userId: number): Promise<DeleteTestOutcome> {

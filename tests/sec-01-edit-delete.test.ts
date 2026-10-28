@@ -332,14 +332,13 @@ test("SEC-01: question creation rejects client-supplied owners and result creati
     method: "POST",
     body: JSON.stringify({
       filename: importedTestId,
-      content: [{ pregunta: "Pregunta importada", respuestas: { A: "Respuesta A" }, respuesta_correcta: "A", userId: otherUserId }],
+      content: [{ pregunta: "Pregunta importada", respuestas: { A: "Respuesta A", B: "Respuesta B" }, respuesta_correcta: "A", userId: otherUserId }],
     }),
   }, ownerId);
-  assert.equal(imported.status, 201);
+  assert.equal(imported.status, 400);
+  assert.match((await imported.json()).message, /campo.*pregunta|desconocido|unrecognized/i);
   const [persistedImport] = await db.select().from(schema.questions).where(eq(schema.questions.testId, importedTestId));
-  assert.ok(persistedImport);
-  creationQuestionIds.push(persistedImport.id);
-  assert.equal(persistedImport.userId, ownerId);
+  assert.equal(persistedImport, undefined);
 
   const resultsBefore = await db.select().from(schema.results)
     .where(eq(schema.results.testId, questionTestId)).orderBy(schema.results.id);

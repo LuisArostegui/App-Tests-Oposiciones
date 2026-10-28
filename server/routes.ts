@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
-import { api } from "@shared/routes";
+import { api, QUESTION_IMPORT_MAX_BYTES } from "@shared/routes";
 import { z } from "zod";
 import { InsertQuestion, registerSchema, loginSchema } from "@shared/schema";
 import { config, isRegistrationEnabled } from "./config";
@@ -19,6 +19,31 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
     return next();
   }
   res.status(401).json({ message: "No autenticado" });
+}
+
+const importIssueFields: Record<string, string> = {
+  filename: "nombre",
+  pregunta: "pregunta",
+  respuestas: "respuestas",
+  respuesta_correcta: "respuesta_correcta",
+  oposicion: "oposicion",
+};
+
+function formatImportValidationError(error: z.ZodError): { message: string; errors: string[] } {
+  const errors = error.issues.slice(0, 10).map((issue) => {
+    const questionIndex = issue.path.find((part): part is number => typeof part === "number");
+    const fieldPath = issue.path.filter((part): part is string => typeof part === "string")
+      .reverse().find((part) => part in importIssueFields);
+    const field = fieldPath ? importIssueFields[fieldPath] : undefined;
+    const location = [
+      questionIndex === undefined ? undefined : `Pregunta ${questionIndex + 1}`,
+      field ? `campo ${field}` : undefined,
+    ].filter(Boolean).join(", ");
+    return `${location ? `${location}: ` : ""}${issue.message.slice(0, 300)}`;
+  });
+  const remaining = error.issues.length - errors.length;
+  if (remaining > 0) errors.push(`Y ${remaining} error(es) más.`);
+  return { message: errors[0] ?? "El contenido no cumple el formato de importación.", errors };
 }
 
 export async function registerRoutes(
@@ -165,25 +190,31 @@ export async function registerRoutes(
 
   app.post(api.tests.import.path, requireAuth, asyncHandler(async (req, res) => {
     try {
+      if (typeof req.body === "object" && req.body !== null && "content" in req.body) {
+        const serializedContent = JSON.stringify(req.body.content);
+        if (typeof serializedContent === "string" && new TextEncoder().encode(serializedContent).byteLength > QUESTION_IMPORT_MAX_BYTES) {
+          return res.status(413).json({ message: "El archivo supera el límite de 5 MiB." });
+        }
+      }
       const input = api.tests.import.input.parse(req.body);
-      
-      const questionsToInsert: InsertQuestion[] = input.content.map((q: any) => ({
+      const questionsToInsert: InsertQuestion[] = input.content.map((question) => ({
         testId: input.filename,
-        questionText: q.pregunta,
-        answers: q.respuestas,
-        correctAnswer: q.respuesta_correcta,
-        category: q.oposicion || "General",
+        questionText: question.pregunta,
+        answers: question.respuestas,
+        correctAnswer: question.respuesta_correcta,
+        category: question.oposicion,
       }));
 
-      if (questionsToInsert.length === 0) {
-        return res.status(400).json({ message: "No valid questions found in JSON" });
+      const outcome = await storage.importQuestions(req.user!.id, input.filename, questionsToInsert);
+      if (outcome === "not_found") {
+        return res.status(404).json({ message: "El propietario no existe" });
       }
-
-      await storage.createQuestions(req.user!.id, questionsToInsert);
-      
+      if (outcome === "name_conflict") {
+        return res.status(409).json({ message: "Ya tienes un banco con ese nombre. Cambia el nombre del archivo para importarlo." });
+      }
       res.status(201).json({ success: true, count: questionsToInsert.length });
     } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: "Solicitud no válida" });
+      if (err instanceof z.ZodError) return res.status(400).json(formatImportValidationError(err));
       throw err;
     }
   }));

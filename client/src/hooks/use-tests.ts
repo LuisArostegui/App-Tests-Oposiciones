@@ -39,7 +39,7 @@ export function useImportTest() {
   const { toast } = useToast();
 
   return usePrivateMutation({
-    mutationFn: async ({ filename, content }: { filename: string; content: any[] }) => {
+    mutationFn: async ({ filename, content }: z.infer<typeof api.tests.import.input>) => {
       const res = await apiFetch(api.tests.import.path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -54,13 +54,6 @@ export function useImportTest() {
       toast({
         title: "Importación Exitosa",
         description: `Se importaron ${data.count} preguntas correctamente.`,
-      });
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Error en la Importación",
-        description: error.message,
-        variant: "destructive",
       });
     },
   });
