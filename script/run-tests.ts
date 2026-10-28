@@ -6,7 +6,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parse as parseDotEnv } from "dotenv";
 
 const projectRoot = process.cwd();
-const testFiles = process.argv.slice(2);
+const rel01Mode = process.argv[2] === "--rel01";
+const testFiles = rel01Mode ? [] : process.argv.slice(2);
 const tsxCliPath = path.join(projectRoot, "node_modules", "tsx", "dist", "cli.mjs");
 const drizzleCliPath = path.join(projectRoot, "node_modules", "drizzle-kit", "bin.cjs");
 const testDatabaseName = "opostest_test";
@@ -99,7 +100,9 @@ async function createTemporaryDatabase(): Promise<{ containerName: string; datab
 }
 
 async function main(): Promise<void> {
-  const configuredTestUrl = process.env.TEST_DATABASE_URL;
+  const configuredTestUrl = rel01Mode
+    ? process.env.REL01_DATABASE_URL
+    : process.env.TEST_DATABASE_URL;
   const developmentUrl = configuredDevelopmentDatabaseUrl();
   let containerName: string | undefined;
 
@@ -121,9 +124,29 @@ async function main(): Promise<void> {
       return;
     }
 
-    process.exitCode = run(process.execPath, [tsxCliPath, "--test", ...testFiles], {
+    const command = rel01Mode
+      ? [
+        path.join(projectRoot, "node_modules", "@playwright", "test", "cli.js"),
+        "test",
+        "--config=tests/rel01/playwright.config.mjs",
+      ]
+      : [tsxCliPath, "--test", ...testFiles];
+    const rel01Environment = rel01Mode
+      ? {
+        DATABASE_URL: testDatabaseUrl,
+        TEST_DATABASE_URL: testDatabaseUrl,
+        APP_URL: "http://127.0.0.1:4186",
+        SESSION_SECRET: "rel01-isolated-browser-session-secret-2026",
+        NODE_ENV: "development",
+        PORT: "4186",
+        REQUEST_LOGGING_ENABLED: "false",
+        REGISTRATION_ENABLED: "true",
+      }
+      : {};
+    process.exitCode = run(process.execPath, command, {
       ...process.env,
       TEST_DATABASE_URL: testDatabaseUrl,
+      ...rel01Environment,
     });
   } finally {
     if (containerName) {

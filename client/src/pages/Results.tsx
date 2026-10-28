@@ -39,8 +39,8 @@ export default function Results() {
 
   const inProgressAttempts = attempts?.filter(a => a.status === "in_progress") || [];
   
-  // Prepare chart data - last 10 attempts
-  const chartData = results?.slice(-10).map((r, i) => ({
+  // The API returns newest results first; chart the newest ten chronologically.
+  const chartData = results?.slice(0, 10).reverse().map((r, i) => ({
     name: `Test ${i + 1}`,
     score: r.score,
     date: r.completedAt,
@@ -258,7 +258,7 @@ export default function Results() {
                         </tr>
                       </thead>
                       <tbody className="divide-y">
-                        {results?.slice().reverse().map((result) => (
+                        {results?.map((result) => (
                           <tr key={result.id} className="hover:bg-muted/30 transition-colors">
                             <td className="px-4 py-3 font-medium">{result.testId.replace('.json', '')}</td>
                             <td className="px-4 py-3 text-muted-foreground flex items-center gap-2">
