@@ -57,8 +57,24 @@ const requiredColumns = {
   },
 };
 
-function checksum(contents) {
+function rawChecksum(contents) {
   return createHash("sha256").update(contents).digest("hex");
+}
+
+function normalizeLineEndings(contents) {
+  return contents.replace(/\r\n/g, "\n");
+}
+
+function checksum(contents) {
+  return rawChecksum(normalizeLineEndings(contents));
+}
+
+function compatibleChecksums(contents) {
+  const normalized = normalizeLineEndings(contents);
+  return new Set([
+    rawChecksum(normalized),
+    rawChecksum(normalized.replace(/\n/g, "\r\n")),
+  ]);
 }
 
 function normalizeDefault(value) {
@@ -242,6 +258,26 @@ async function existingPublicTables(client) {
   return result.rows.map((row) => row.tablename);
 }
 
+function validateAppliedHistory(appliedRows, migrations) {
+  if (appliedRows.length > migrations.length) {
+    throw new Error("El historial aplicado contiene migraciones que no existen en el catálogo disponible.");
+  }
+
+  for (const [index, saved] of appliedRows.entries()) {
+    const migration = migrations[index];
+    if (!migration || saved.version !== migration.filename || saved.filename !== migration.filename) {
+      throw new Error(
+        `El historial aplicado no es un prefijo exacto y ordenado del catálogo: se esperaba ${migration?.filename ?? "ninguna migración"} y se encontró ${saved.filename} (${saved.version}).`,
+      );
+    }
+    if (!compatibleChecksums(migration.contents).has(saved.checksum)) {
+      throw new Error(`La migración aplicada ${migration.filename} no coincide con su checksum registrado.`);
+    }
+  }
+
+  return appliedRows.length;
+}
+
 async function migrate(client, migrations) {
   const hasHistory = await historyExists(client);
   if (!hasHistory) {
@@ -251,22 +287,12 @@ async function migrate(client, migrations) {
     await createHistory(client);
   }
 
-  const appliedResult = await client.query(`SELECT version, filename, checksum FROM ${historyTable}`);
-  const applied = new Map(appliedResult.rows.map((row) => [row.version, row]));
-  if (!applied.has(migrations[0].filename) && (await existingPublicTables(client)).length) {
+  const appliedResult = await client.query(`SELECT version, filename, checksum FROM ${historyTable} ORDER BY version ASC`);
+  const appliedCount = validateAppliedHistory(appliedResult.rows, migrations);
+  if (appliedCount === 0 && (await existingPublicTables(client)).length) {
     throw new Error("La base ya contiene tablas sin baseline aplicado. Valídala y ejecuta primero `npm run db:baseline`.");
   }
-  for (const migration of migrations) {
-    const saved = applied.get(migration.filename);
-    if (saved) {
-      if (saved.filename !== migration.filename || saved.checksum !== migration.checksum) {
-        throw new Error(`La migración aplicada ${migration.filename} no coincide con su checksum registrado.`);
-      }
-      continue;
-    }
-    if (applied.size > 0 && migration === migrations[0] && !applied.has(migration.filename)) {
-      throw new Error("Falta el baseline en el historial; no se aplican migraciones posteriores automáticamente.");
-    }
+  for (const migration of migrations.slice(appliedCount)) {
     await recordMigration(client, migration);
     console.log(`Migración aplicada: ${migration.filename}`);
   }

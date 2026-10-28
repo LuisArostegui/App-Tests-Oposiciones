@@ -1,6 +1,12 @@
 # Migraciones versionadas
 
-`npm run db:migrate` es el único comando de aplicación de esquema para producción. La aplicación no migra al arrancar. El runner toma un bloqueo asesor de PostgreSQL, aplica cada archivo en una transacción, registra su nombre y SHA-256 en `opostest_schema_migrations` y rechaza cambios posteriores en un archivo ya aplicado.
+`npm run db:migrate` es el único comando de aplicación de esquema para producción. La aplicación no migra al arrancar. El runner toma un bloqueo asesor de PostgreSQL, comprueba el historial completo contra el prefijo ordenado del catálogo antes de ejecutar SQL pendiente, aplica cada archivo en una transacción y registra su nombre y SHA-256 en `opostest_schema_migrations`.
+
+## Orden y checksums
+
+Los archivos `migrations/*.sql` usan finales de línea LF; `.gitattributes` aplica esta política en los checkouts de Git. El SHA-256 se calcula sobre el SQL normalizado a LF, por lo que LF y CRLF representan el mismo contenido. Para mantener instalaciones existentes, un checksum histórico calculado con LF o CRLF también se acepta sin reescribir su registro. Cambios reales en el contenido de una migración aplicada siguen causando un error.
+
+Antes de ejecutar SQL, el runner exige que las filas aplicadas, ordenadas por `version`, coincidan exactamente con el comienzo del catálogo disponible. Rechaza migraciones aplicadas que falten del catálogo, versiones/nombres inconsistentes, checksums incompatibles y archivos nuevos insertados antes de migraciones ya aplicadas. Un rechazo no ejecuta SQL pendiente ni modifica el historial. Añade las nuevas migraciones al final del orden existente; no renombres ni edites archivos aplicados.
 
 ## Base nueva
 
@@ -31,7 +37,7 @@ El comando no sustituye la comprobación de la copia: valida estructura y relaci
 
 ## Validación aislada
 
-`npm run test:infra-migrations` exige `INFRA_TEST_DATABASE_URL` con nombre terminado en `_infra_test`. Crea dos bases temporales, prueba inicialización, ejecuciones concurrentes y repetidas, adopción de un esquema previo con resultado legacy y limpia solo esas bases creadas por la suite.
+`npm run test:infra-migrations` exige `INFRA_TEST_DATABASE_URL` con nombre terminado en `_infra_test`. Crea bases temporales, prueba inicialización, ejecuciones concurrentes y repetidas, compatibilidad con checksums históricos CRLF sin reescritura, rechazo de cambios SQL y de historiales que no sean prefijos exactos sin cambios parciales, adopción de un esquema previo con resultado legacy y validación de esquemas incompatibles. La suite limpia solo las bases que crea.
 
 ```sh
 $env:INFRA_TEST_DATABASE_URL = "postgresql://.../opostest_infra_test"

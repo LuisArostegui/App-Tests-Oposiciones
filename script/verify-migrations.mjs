@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { after, before } from "node:test";
@@ -9,6 +9,7 @@ import pg from "pg";
 
 const { Client } = pg;
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const defaultRunnerPath = path.join(projectRoot, "script", "db-migrate.mjs");
 const adminUrl = process.env.INFRA_TEST_DATABASE_URL;
 if (!adminUrl || !new URL(adminUrl).pathname.slice(1).endsWith("_infra_test")) {
   throw new Error("INFRA_TEST_DATABASE_URL debe apuntar a una base desechable cuyo nombre termine en _infra_test.");
@@ -47,9 +48,9 @@ async function connectDatabase(name) {
   return client;
 }
 
-function runMigrationCommand(database, command) {
+function runMigrationCommand(database, command, runnerPath = defaultRunnerPath) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["script/db-migrate.mjs", command], {
+    const child = spawn(process.execPath, [runnerPath, command], {
       cwd: projectRoot,
       env: { ...process.env, DATABASE_URL: urlForDatabase(database) },
       stdio: ["ignore", "pipe", "pipe"],
@@ -63,16 +64,44 @@ function runMigrationCommand(database, command) {
   });
 }
 
+async function createRunnerSandbox({ includeAttemptLink = true, insertedMigration = null, changedAttemptLink = false } = {}) {
+  const sandbox = await mkdtemp(path.join(projectRoot, ".infra-migrations-runner-"));
+  const scriptDirectory = path.join(sandbox, "script");
+  const migrationsDirectory = path.join(sandbox, "migrations");
+  await mkdir(scriptDirectory);
+  await mkdir(migrationsDirectory);
+  await cp(defaultRunnerPath, path.join(scriptDirectory, "db-migrate.mjs"));
+  await cp(path.join(projectRoot, "migrations", "20261028_000_baseline.sql"), path.join(migrationsDirectory, "20261028_000_baseline.sql"));
+  if (includeAttemptLink) {
+    const attemptLinkPath = path.join(projectRoot, "migrations", "20261028_attempt_result_link.sql");
+    if (changedAttemptLink) {
+      await writeFile(path.join(migrationsDirectory, "20261028_attempt_result_link.sql"), `${await readFile(attemptLinkPath, "utf8")}\n-- cambio real de prueba\n`);
+    } else {
+      await cp(attemptLinkPath, path.join(migrationsDirectory, "20261028_attempt_result_link.sql"));
+    }
+  }
+  if (insertedMigration) {
+    await writeFile(path.join(migrationsDirectory, insertedMigration.filename), insertedMigration.contents);
+  }
+  return sandbox;
+}
+
 let emptyDatabase;
 let existingDatabase;
 let currentDatabase;
 let incompatibleDatabase;
+let portableChecksumsDatabase;
+let missingAppliedDatabase;
+let outOfOrderDatabase;
 
 before(async () => {
   emptyDatabase = await createDatabase("empty");
   existingDatabase = await createDatabase("existing");
   currentDatabase = await createDatabase("current");
   incompatibleDatabase = await createDatabase("incompatible");
+  portableChecksumsDatabase = await createDatabase("portable");
+  missingAppliedDatabase = await createDatabase("missing_applied");
+  outOfOrderDatabase = await createDatabase("out_of_order");
 });
 
 after(async () => {
@@ -107,7 +136,9 @@ test("migrate initializes an empty database once, including concurrent invocatio
     assert.equal(applied.rowCount, 2);
     assert.match(applied.rows[0].filename, /baseline\.sql$/);
     assert.equal(applied.rows[1].filename, "20261028_attempt_result_link.sql");
-    assert.match(applied.rows[0].checksum, /^[a-f0-9]{64}$/);
+    const baselineContents = await readFile(path.join(projectRoot, "migrations", applied.rows[0].filename), "utf8");
+    const expectedLfChecksum = createHash("sha256").update(baselineContents.replace(/\r\n/g, "\n")).digest("hex");
+    assert.equal(applied.rows[0].checksum, expectedLfChecksum, "new history entries use the canonical LF checksum");
 
     const attemptColumn = await client.query(
       "SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'results' AND column_name = 'attempt_id'",
@@ -126,6 +157,109 @@ test("migrate initializes an empty database once, including concurrent invocatio
     assert.match(tampered.stderr + tampered.stdout, /checksum/i);
   } finally {
     await client.end();
+  }
+});
+
+test("migrate accepts legacy CRLF checksums without rewriting the applied history", async () => {
+  const initialized = await runMigrationCommand(portableChecksumsDatabase, "migrate");
+  assert.equal(initialized.status, 0, initialized.stderr || initialized.stdout);
+
+  let appliedBeforeSqlChange;
+  const client = await connectDatabase(portableChecksumsDatabase);
+  try {
+    const applied = await client.query("SELECT version, filename, checksum, applied_at FROM opostest_schema_migrations ORDER BY version");
+    const crlfChecksums = [];
+    for (const row of applied.rows) {
+      const contents = await readFile(path.join(projectRoot, "migrations", row.filename), "utf8");
+      const checksum = createHash("sha256").update(contents.replace(/\n/g, "\r\n")).digest("hex");
+      crlfChecksums.push({ ...row, checksum });
+      await client.query("UPDATE opostest_schema_migrations SET checksum = $1 WHERE version = $2", [checksum, row.version]);
+    }
+
+    const before = await client.query("SELECT version, filename, checksum, applied_at FROM opostest_schema_migrations ORDER BY version");
+    appliedBeforeSqlChange = before.rows;
+    const rerun = await runMigrationCommand(portableChecksumsDatabase, "migrate");
+    assert.equal(rerun.status, 0, rerun.stderr || rerun.stdout);
+    const after = await client.query("SELECT version, filename, checksum, applied_at FROM opostest_schema_migrations ORDER BY version");
+    assert.deepEqual(after.rows, before.rows);
+    assert.deepEqual(after.rows.map(({ checksum }) => checksum), crlfChecksums.map(({ checksum }) => checksum));
+  } finally {
+    await client.end();
+  }
+
+  const sandbox = await createRunnerSandbox({ changedAttemptLink: true });
+  try {
+    const changedSql = await runMigrationCommand(portableChecksumsDatabase, "migrate", path.join(sandbox, "script", "db-migrate.mjs"));
+    assert.notEqual(changedSql.status, 0, "a real SQL edit must not match a previously applied checksum");
+    assert.match(changedSql.stderr + changedSql.stdout, /checksum/i);
+    const inspect = await connectDatabase(portableChecksumsDatabase);
+    try {
+      const afterRejection = await inspect.query("SELECT version, filename, checksum, applied_at FROM opostest_schema_migrations ORDER BY version");
+      assert.deepEqual(afterRejection.rows, appliedBeforeSqlChange, "a changed applied migration must leave history unchanged");
+    } finally {
+      await inspect.end();
+    }
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("migrate rejects an applied migration missing from the catalog before applying pending SQL", async () => {
+  const initialized = await runMigrationCommand(missingAppliedDatabase, "migrate");
+  assert.equal(initialized.status, 0, initialized.stderr || initialized.stdout);
+
+  const sandbox = await createRunnerSandbox({
+    includeAttemptLink: false,
+    insertedMigration: {
+      filename: "20261029_pending_after_missing.sql",
+      contents: "CREATE TABLE migration_should_not_run (id integer PRIMARY KEY);\n",
+    },
+  });
+  try {
+    const client = await connectDatabase(missingAppliedDatabase);
+    try {
+      const before = await client.query("SELECT version, filename, checksum, applied_at FROM opostest_schema_migrations ORDER BY version");
+      const rejected = await runMigrationCommand(missingAppliedDatabase, "migrate", path.join(sandbox, "script", "db-migrate.mjs"));
+      assert.notEqual(rejected.status, 0, "an applied file absent from the catalog must be rejected");
+      assert.match(rejected.stderr + rejected.stdout, /historial|prefijo|catalogo|migraci[oó]n aplicada/i);
+      const after = await client.query("SELECT version, filename, checksum, applied_at FROM opostest_schema_migrations ORDER BY version");
+      assert.deepEqual(after.rows, before.rows, "rejection must not alter applied history");
+      const pending = await client.query("SELECT to_regclass('public.migration_should_not_run') AS table_name");
+      assert.equal(pending.rows[0].table_name, null, "rejection must not execute pending migration SQL");
+    } finally {
+      await client.end();
+    }
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("migrate rejects a new migration inserted before applied entries without partial changes", async () => {
+  const initialized = await runMigrationCommand(outOfOrderDatabase, "migrate");
+  assert.equal(initialized.status, 0, initialized.stderr || initialized.stdout);
+
+  const sandbox = await createRunnerSandbox({
+    insertedMigration: {
+      filename: "20261028_001_inserted_before_link.sql",
+      contents: "CREATE TABLE migration_should_not_run (id integer PRIMARY KEY);\n",
+    },
+  });
+  try {
+    const client = await connectDatabase(outOfOrderDatabase);
+    try {
+      const before = await client.query("SELECT version, filename, checksum, applied_at FROM opostest_schema_migrations ORDER BY version");
+      const rejected = await runMigrationCommand(outOfOrderDatabase, "migrate", path.join(sandbox, "script", "db-migrate.mjs"));
+      assert.notEqual(rejected.status, 0, "a catalog insertion before applied entries must be rejected");
+      assert.match(rejected.stderr + rejected.stdout, /historial|prefijo|orden|catalogo|migraci[oó]n aplicada/i);
+      const after = await client.query("SELECT version, filename, checksum, applied_at FROM opostest_schema_migrations ORDER BY version");
+      assert.deepEqual(after.rows, before.rows, "rejection must not alter applied history");
+      const pending = await client.query("SELECT to_regclass('public.migration_should_not_run') AS table_name");
+      assert.equal(pending.rows[0].table_name, null, "rejection must not execute the inserted migration");
+    } finally {
+      await client.end();
+    }
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
   }
 });
 
