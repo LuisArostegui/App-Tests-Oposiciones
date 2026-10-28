@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from "react";
-import { useRoute, useLocation, useSearch } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
 import { useTest } from "@/hooks/use-tests";
 import { useResults } from "@/hooks/use-results";
 import { useAttempt, useCreateAttempt, useFinalizeAttempt, useUpdateAttempt } from "@/hooks/use-attempts";
@@ -13,6 +13,8 @@ import { ChevronLeft, ChevronRight, Flag, Shuffle, Home, Save } from "lucide-rea
 import { type Question, type Result } from "@shared/schema";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
+import { ApiError, getLoadErrorMessage } from "@/lib/api-error";
+import { buildTestUrl, buildUrl, decodeTestIdFromPathname } from "@shared/routes";
 
 function shuffleArray<T>(array: T[]): T[] {
   const newArr = [...array];
@@ -24,20 +26,21 @@ function shuffleArray<T>(array: T[]): T[] {
 }
 
 export default function TestView() {
-  const [, params] = useRoute("/test/:id");
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const searchString = useSearch();
   const searchParams = new URLSearchParams(searchString);
   const attemptIdParam = searchParams.get("attempt");
   
-  const testId = decodeURIComponent(params?.id || "");
+  const testId = decodeTestIdFromPathname(window.location.pathname);
   const { toast } = useToast();
   
-  const { data: questions, isLoading } = useTest(testId);
+  const { data: questions, isLoading, isError: testError, error: testLoadError, refetch: refetchTest } = useTest(testId);
   const { mutateAsync: createAttempt } = useCreateAttempt();
   const { mutateAsync: updateAttemptAsync } = useUpdateAttempt();
   const { mutateAsync: finalizeAttempt, isPending: isFinalizing } = useFinalizeAttempt();
-  const { data: existingAttempt, isLoading: attemptLoading, isError: attemptError, refetch: refetchAttempt } = useAttempt(attemptIdParam ? Number(attemptIdParam) : null);
+  const parsedAttemptId = attemptIdParam ? Number(attemptIdParam) : null;
+  const requestedAttemptId = parsedAttemptId && Number.isSafeInteger(parsedAttemptId) && parsedAttemptId > 0 ? parsedAttemptId : null;
+  const { data: existingAttempt, isLoading: attemptLoading, isError: attemptError, error: attemptLoadError, refetch: refetchAttempt } = useAttempt(requestedAttemptId);
   const { data: results, isLoading: resultsLoading, isError: resultsError, refetch: refetchResults } = useResults();
 
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -47,7 +50,7 @@ export default function TestView() {
   const [isStarted, setIsStarted] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [attemptId, setAttemptId] = useState<number | null>(null);
-  const [attemptLoadFailed, setAttemptLoadFailed] = useState(false);
+  const [attemptQuestionConflict, setAttemptQuestionConflict] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "pending" | "saving" | "error">("saved");
   const [finalizeError, setFinalizeError] = useState(false);
   const [completedResult, setCompletedResult] = useState<Result | null>(null);
@@ -65,6 +68,12 @@ export default function TestView() {
   const historyGuardAdded = useRef(false);
   const removingHistoryGuard = useRef(false);
   const resultLookupRefreshAttempt = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (existingAttempt && attemptIdParam && existingAttempt.testId !== testId) {
+      setLocation(buildTestUrl(existingAttempt.testId, existingAttempt.id), { replace: true });
+    }
+  }, [existingAttempt, attemptIdParam, testId, setLocation]);
 
   const refreshCompletedResult = useCallback(async (id: number) => {
     resultLookupRefreshAttempt.current = id;
@@ -87,22 +96,6 @@ export default function TestView() {
       setIsRefreshingCompletedResult(false);
     }
   }, [refetchResults]);
-
-  // Handle failed attempt load - clear URL param and show error
-  useEffect(() => {
-    if (attemptIdParam && !attemptLoading && !existingAttempt && !resumeHandled.current) {
-      if (attemptError || (!attemptLoading && !existingAttempt)) {
-        setAttemptLoadFailed(true);
-        toast({ 
-          title: "Intento No Encontrado", 
-          description: "No se pudo encontrar el intento guardado. Empezando de nuevo.", 
-          variant: "destructive" 
-        });
-        // Clear URL parameter
-        setLocation(`/test/${encodeURIComponent(testId)}`, { replace: true });
-      }
-    }
-  }, [attemptIdParam, attemptLoading, existingAttempt, attemptError, toast, setLocation, testId]);
 
   // Resume from existing attempt
   useEffect(() => {
@@ -132,20 +125,23 @@ export default function TestView() {
       return;
     }
 
+    if (existingAttempt.status === "in_progress" && testError) {
+      if (testLoadError instanceof ApiError && testLoadError.status === 404) {
+        resumeHandled.current = true;
+        setAttemptQuestionConflict(true);
+      }
+      return;
+    }
+
     if (questions && !resumeHandled.current) {
       resumeHandled.current = true;
       const order = existingAttempt.questionOrder as number[];
       const orderedQuestions = order
         .map(qId => questions.find(q => q.id === qId))
         .filter((q): q is Question => q !== undefined);
-      
-      if (orderedQuestions.length === 0) {
-        toast({ 
-          title: "Preguntas No Encontradas", 
-          description: "Las preguntas de este test han sido eliminadas. Empezando de nuevo.", 
-          variant: "destructive" 
-        });
-        setLocation(`/test/${encodeURIComponent(testId)}`, { replace: true });
+
+      if (order.length === 0 || orderedQuestions.length !== order.length || new Set(order).size !== order.length) {
+        setAttemptQuestionConflict(true);
         return;
       }
       
@@ -158,17 +154,14 @@ export default function TestView() {
       setAttemptId(existingAttempt.id);
       setIsStarted(true);
     }
-  }, [existingAttempt, questions, results, resultsLoading, resultsError, refreshCompletedResult, toast, setLocation, testId]);
+  }, [existingAttempt, questions, testError, testLoadError, results, resultsLoading, resultsError, refreshCompletedResult, toast, setLocation, testId]);
 
   // Initialize questions when not resuming
   useEffect(() => {
-    if (questions && !attemptIdParam && !attemptLoadFailed) {
-      setActiveQuestions(randomize ? shuffleArray(questions) : questions);
-    } else if (questions && attemptLoadFailed) {
-      // Initialize after failed resume attempt
+    if (questions && !attemptIdParam) {
       setActiveQuestions(randomize ? shuffleArray(questions) : questions);
     }
-  }, [questions, randomize, attemptIdParam, attemptLoadFailed]);
+  }, [questions, randomize, attemptIdParam]);
 
   // Auto-save progress every time answers or index change
   useEffect(() => {
@@ -247,7 +240,7 @@ export default function TestView() {
     setLocation(path);
   };
 
-  const isLoadingState = isLoading || (attemptIdParam && attemptLoading && !attemptLoadFailed)
+  const isLoadingState = (isLoading && existingAttempt?.status !== "completed") || (attemptIdParam && attemptLoading)
     || (existingAttempt?.status === "completed" && resultsLoading) || isRefreshingCompletedResult;
   
   if (isLoadingState) return (
@@ -259,15 +252,8 @@ export default function TestView() {
     </div>
   );
 
-  if ((!questions || questions.length === 0) && existingAttempt?.status !== "completed") return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4">
-      <h2 className="text-2xl font-bold mb-4">Test No Encontrado</h2>
-      <Button onClick={() => setLocation("/")}>Volver al Inicio</Button>
-    </div>
-  );
-
   // Safety check - if activeQuestions is empty but we have questions, initialize
-  if (!isFinished && questions && activeQuestions.length === 0 && questions.length > 0) {
+  if (!attemptIdParam && !isFinished && questions && activeQuestions.length === 0 && questions.length > 0) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -309,7 +295,7 @@ export default function TestView() {
       setAttemptId(attempt.id);
       resumeHandled.current = true;
       // Update URL with attempt ID for refresh support
-      setLocation(`/test/${encodeURIComponent(testId)}?attempt=${attempt.id}`, { replace: true });
+        setLocation(buildTestUrl(testId, attempt.id), { replace: true });
       setIsStarted(true);
     } catch (err) {
       toast({ title: "Error", description: "No se pudo iniciar el test", variant: "destructive" });
@@ -329,7 +315,11 @@ export default function TestView() {
       setSaveState("saved");
       await removeHistoryGuard();
       setIsFinished(true);
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409 && /faltan preguntas/i.test(error.message)) {
+        setAttemptQuestionConflict(true);
+        return;
+      }
       const refreshedAttempt = await refetchAttempt();
       if (refreshedAttempt.data?.status === "completed") {
         setAttemptId(refreshedAttempt.data.id);
@@ -371,6 +361,107 @@ export default function TestView() {
     }
   };
 
+  const handleRetryAttemptQuestions = async () => {
+    const refreshed = await refetchTest();
+    if (refreshed.isError || !refreshed.data || !existingAttempt || existingAttempt.status !== "in_progress") {
+      setAttemptQuestionConflict(true);
+      return;
+    }
+
+    const order = existingAttempt.questionOrder as number[];
+    const orderedQuestions = order
+      .map((questionId) => refreshed.data.find((question) => question.id === questionId))
+      .filter((question): question is Question => question !== undefined);
+
+    if (order.length === 0 || orderedQuestions.length !== order.length || new Set(order).size !== order.length) {
+      setAttemptQuestionConflict(true);
+      return;
+    }
+
+    const isCurrentAttemptActive = isStarted && attemptId === existingAttempt.id;
+    resumeHandled.current = true;
+    setActiveQuestions(orderedQuestions);
+    if (!isCurrentAttemptActive) {
+      setAttemptId(existingAttempt.id);
+      setAnswers(existingAttempt.answers as Record<number, string> || {});
+      setCurrentIndex(Math.min(existingAttempt.currentIndex, orderedQuestions.length - 1));
+    }
+    setIsStarted(true);
+    setAttemptQuestionConflict(false);
+  };
+
+  const returnTo = `${location}${searchString ? `?${searchString.replace(/^\?/, "")}` : ""}`;
+
+  if (attemptIdParam && attemptLoading) {
+    return <div className="min-h-screen flex items-center justify-center" role="status">Recuperando el intento…</div>;
+  }
+
+  if (attemptIdParam && (!requestedAttemptId || attemptError)) {
+    const errorMessage = requestedAttemptId
+      ? getLoadErrorMessage(attemptLoadError, "attempt")
+      : "El identificador del intento no es válido. La referencia se ha conservado.";
+    const isUnauthorized = attemptLoadError instanceof ApiError && attemptLoadError.status === 401;
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-muted/20">
+        <Card className="max-w-md w-full p-8 text-center space-y-5">
+          <h2 className="text-2xl font-bold">No se pudo recuperar el intento</h2>
+          <p className="text-muted-foreground" role="alert" data-testid="attempt-load-error">{errorMessage}</p>
+          <div className="flex justify-center gap-3">
+            {isUnauthorized ? (
+              <Button asChild><Link href={buildUrl("/login?returnTo=:returnTo", { returnTo })}>Iniciar sesión</Link></Button>
+            ) : (
+              <Button onClick={() => void refetchAttempt()} data-testid="button-retry-attempt">Reintentar</Button>
+            )}
+            <Button asChild variant="outline"><Link href="/">Inicio</Link></Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (existingAttempt?.status === "completed" && !isFinished) {
+    return <div className="min-h-screen flex items-center justify-center" role="status">Recuperando el resultado…</div>;
+  }
+
+  if (attemptQuestionConflict) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-muted/20">
+        <Card className="max-w-md w-full p-8 text-center space-y-5">
+          <h2 className="text-2xl font-bold">Faltan preguntas del intento</h2>
+          <p className="text-muted-foreground" role="alert" data-testid="attempt-question-conflict">
+            No se puede reanudar ni finalizar una lista incompleta. El intento, sus respuestas y su identificador siguen guardados.
+          </p>
+          <div className="flex justify-center gap-3">
+            <Button variant="outline" onClick={() => {
+              void handleRetryAttemptQuestions();
+            }} data-testid="button-retry-questions">Volver a comprobar</Button>
+            <Button asChild><Link href="/results">Ver historial</Link></Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (testError && existingAttempt?.status !== "completed") {
+    const isUnauthorized = testLoadError instanceof ApiError && testLoadError.status === 401;
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-muted/20">
+        <Card className="max-w-md w-full p-8 text-center space-y-5">
+          <h2 className="text-2xl font-bold">No se pudo cargar el test</h2>
+          <p className="text-muted-foreground" role="alert" data-testid="test-load-error">{getLoadErrorMessage(testLoadError, "test")}</p>
+          <div className="flex justify-center gap-3">
+            {isUnauthorized ? (
+              <Button asChild><Link href={buildUrl("/login?returnTo=:returnTo", { returnTo })}>Iniciar sesión</Link></Button>
+            ) : (
+              <Button onClick={() => void refetchTest()} data-testid="button-retry-test">Reintentar</Button>
+            )}
+            <Button asChild variant="outline"><Link href="/">Inicio</Link></Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   // Intro Screen
   if (!isStarted) {
     return (
@@ -399,9 +490,7 @@ export default function TestView() {
                 Comenzar Test
               </Button>
               
-              <Button variant="ghost" className="w-full" onClick={() => setLocation("/")} data-testid="button-cancel">
-                Cancelar
-              </Button>
+              <Button asChild variant="ghost" className="w-full"><Link href="/" data-testid="button-cancel">Cancelar</Link></Button>
             </div>
           </Card>
         </motion.div>
@@ -418,7 +507,7 @@ export default function TestView() {
             <h2 className="text-2xl font-bold">No se pudo recuperar el resultado</h2>
             <p className="text-muted-foreground">El intento está finalizado y permanece bloqueado. Comprueba tu conexión e inténtalo de nuevo.</p>
             <div className="flex justify-center gap-3">
-              <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-home">Inicio</Button>
+              <Button asChild variant="outline"><Link href="/" data-testid="button-home">Inicio</Link></Button>
               <Button onClick={() => { if (attemptId) void refreshCompletedResult(attemptId); }} data-testid="button-retry-result">Reintentar</Button>
             </div>
           </Card>
@@ -435,8 +524,8 @@ export default function TestView() {
               Este intento finalizado no tiene un resultado asociado. Puede ser un intento histórico anterior al registro de resultados enlazados; no recalculamos la puntuación para evitar mostrar un resultado distinto al confirmado.
             </p>
             <div className="flex justify-center gap-3">
-              <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-home">Inicio</Button>
-              <Button onClick={() => setLocation("/results")} data-testid="button-view-history">Ver Historial</Button>
+              <Button asChild variant="outline"><Link href="/" data-testid="button-home">Inicio</Link></Button>
+              <Button asChild><Link href="/results" data-testid="button-view-history">Ver Historial</Link></Button>
             </div>
           </Card>
         </div>
@@ -466,12 +555,8 @@ export default function TestView() {
             </p>
             
             <div className="grid grid-cols-2 gap-4">
-              <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-home">
-                <Home className="w-4 h-4 mr-2" /> Inicio
-              </Button>
-              <Button onClick={() => setLocation("/results")} data-testid="button-view-history">
-                Ver Historial
-              </Button>
+              <Button asChild variant="outline"><Link href="/" data-testid="button-home"><Home className="w-4 h-4 mr-2" /> Inicio</Link></Button>
+              <Button asChild><Link href="/results" data-testid="button-view-history">Ver Historial</Link></Button>
             </div>
           </Card>
         </motion.div>
@@ -484,7 +569,7 @@ export default function TestView() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4">
         <h2 className="text-2xl font-bold mb-4">Error Cargando Pregunta</h2>
-        <Button onClick={() => setLocation("/")}>Volver al Inicio</Button>
+        <Button asChild><Link href="/">Volver al Inicio</Link></Button>
       </div>
     );
   }

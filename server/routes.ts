@@ -133,9 +133,12 @@ export async function registerRoutes(
 
   app.delete(api.tests.delete.path, requireAuth, asyncHandler(async (req, res) => {
     const testId = req.params.id;
-    const deleted = await storage.deleteTest(testId, req.user!.id);
-    if (!deleted) {
+    const outcome = await storage.deleteTest(testId, req.user!.id);
+    if (outcome === "not_found") {
       return res.status(404).json({ message: "Test not found" });
+    }
+    if (outcome === "in_progress") {
+      return res.status(409).json({ message: "No se puede borrar el test mientras haya intentos abiertos. Finalízalos o elimínalos desde Historial y vuelve a intentarlo." });
     }
     res.status(204).send();
   }));
@@ -144,10 +147,14 @@ export async function registerRoutes(
     try {
       const oldTestId = req.params.id;
       const { newName } = api.tests.rename.input.parse(req.body);
-      const newTestId = newName.endsWith('.json') ? newName : `${newName}.json`;
-      const renamed = await storage.renameTest(oldTestId, newTestId, req.user!.id);
-      if (!renamed) {
+      const normalizedName = newName.trim();
+      const newTestId = normalizedName.endsWith('.json') ? normalizedName : `${normalizedName}.json`;
+      const outcome = await storage.renameTest(oldTestId, newTestId, req.user!.id);
+      if (outcome === "not_found") {
         return res.status(404).json({ message: "Test not found" });
+      }
+      if (outcome === "name_conflict") {
+        return res.status(409).json({ message: "Ya tienes un test con ese nombre" });
       }
       res.json({ success: true, newId: newTestId });
     } catch (err) {

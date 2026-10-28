@@ -1,4 +1,5 @@
 import { Link, useLocation } from "wouter";
+import { buildTestUrl } from "@shared/routes";
 import { Home, BarChart3, Settings, Plus, Play, LogOut } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -55,7 +56,7 @@ export function MobileNav() {
 
   const handleResume = () => {
     if (latestAttempt) {
-      setLocation(`/test/${encodeURIComponent(latestAttempt.testId)}?attempt=${latestAttempt.id}`);
+      setLocation(buildTestUrl(latestAttempt.testId, latestAttempt.id));
     }
     setShowResumeDialog(false);
   };
@@ -92,19 +93,20 @@ export function MobileNav() {
           {navItems.map((item) => {
             const isActive = isActiveRoute(item.href);
             return (
-              <Link key={item.href} href={item.href}>
-                <button
-                  className={cn(
-                    "flex flex-col items-center justify-center gap-1 px-4 py-2 rounded-lg transition-colors min-w-[64px]",
-                    isActive
-                      ? "text-primary bg-primary/10"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                  )}
-                  data-testid={`nav-${item.label.toLowerCase()}`}
-                >
-                  <item.icon className="h-5 w-5" />
-                  <span className="text-xs font-medium">{item.label}</span>
-                </button>
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "flex flex-col items-center justify-center gap-1 px-4 py-2 rounded-lg transition-colors min-w-[64px]",
+                  isActive
+                    ? "text-primary bg-primary/10"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                )}
+                data-testid={`nav-${item.label.toLowerCase()}`}
+                aria-current={isActive ? "page" : undefined}
+              >
+                <item.icon className="h-5 w-5" />
+                <span className="text-xs font-medium">{item.label}</span>
               </Link>
             );
           })}
@@ -122,19 +124,19 @@ export function MobileNav() {
           <div className="w-14" />
 
           {/* Right side items */}
-          <Link href="/admin">
-            <button
-              className={cn(
-                "flex flex-col items-center justify-center gap-1 px-4 py-2 rounded-lg transition-colors min-w-[64px]",
-                isActiveRoute("/admin")
-                  ? "text-primary bg-primary/10"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              )}
-              data-testid="nav-admin"
-            >
-              <Settings className="h-5 w-5" />
-              <span className="text-xs font-medium">Admin</span>
-            </button>
+          <Link
+            href="/admin"
+            className={cn(
+              "flex flex-col items-center justify-center gap-1 px-4 py-2 rounded-lg transition-colors min-w-[64px]",
+              isActiveRoute("/admin")
+                ? "text-primary bg-primary/10"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            )}
+            data-testid="nav-admin"
+            aria-current={isActiveRoute("/admin") ? "page" : undefined}
+          >
+            <Settings className="h-5 w-5" />
+            <span className="text-xs font-medium">Admin</span>
           </Link>
 
           {/* Logout button */}

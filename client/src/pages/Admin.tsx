@@ -1,5 +1,5 @@
 import { useTests, useTest, useDeleteQuestion } from "@/hooks/use-tests";
-import { Link } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
@@ -13,11 +13,14 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
+import { buildUrl } from "@shared/routes";
 
 export default function Admin() {
   const { data: tests } = useTests();
+  const [, setLocation] = useLocation();
+  const searchString = useSearch();
   const { logout, isLoggingOut } = useAuth();
-  const [selectedTestId, setSelectedTestId] = useState<string>("");
+  const [selectedTestId, setSelectedTestId] = useState<string>(() => new URLSearchParams(searchString).get("test") ?? "");
   const [searchQuery, setSearchQuery] = useState("");
   
   const { data: questions, isLoading } = useTest(selectedTestId);
@@ -29,15 +32,20 @@ export default function Admin() {
 
   const selectedTest = tests?.find(t => t.id === selectedTestId);
 
+  const selectTest = (testId: string) => {
+    setSelectedTestId(testId);
+    setLocation(testId ? buildUrl("/admin?test=:id", { id: testId }) : "/admin");
+  };
+
   return (
     <div className="min-h-screen bg-muted/30">
       <header className="sticky top-0 z-10 bg-background/95 backdrop-blur-md border-b">
         <div className="max-w-7xl mx-auto px-4 md:px-6 h-16 flex items-center gap-4">
-          <Link href="/">
-            <Button variant="ghost" size="icon" data-testid="button-back-home">
+          <Button asChild variant="ghost" size="icon">
+            <Link href="/" data-testid="button-back-home">
               <ArrowLeft className="w-5 h-5" />
-            </Button>
-          </Link>
+            </Link>
+          </Button>
           <div className="flex-1">
             <h1 className="text-xl font-display font-bold">Gestor de Preguntas</h1>
             <p className="text-sm text-muted-foreground hidden md:block">Crea, edita y organiza las preguntas de tus tests</p>
@@ -67,7 +75,7 @@ export default function Admin() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <Select value={selectedTestId} onValueChange={setSelectedTestId}>
+                <Select value={selectedTestId} onValueChange={selectTest}>
                   <SelectTrigger data-testid="select-test">
                     <SelectValue placeholder="Elige un test..." />
                   </SelectTrigger>
@@ -125,7 +133,7 @@ export default function Admin() {
                 <CardHeader className="border-b bg-card">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
-                      <CardTitle className="text-lg">{selectedTestId.replace('.json', '')}</CardTitle>
+                      <CardTitle className="text-lg" data-testid="admin-selected-test">{selectedTestId.replace('.json', '')}</CardTitle>
                       <CardDescription>{filteredQuestions?.length || 0} preguntas</CardDescription>
                     </div>
                     <div className="flex items-center gap-2 md:gap-3 flex-wrap justify-end">

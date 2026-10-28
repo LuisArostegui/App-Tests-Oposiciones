@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiFetch, capturePrivateSessionEpoch, isPrivateSessionEpochCurrent } from "@/lib/queryClient";
 import { usePrivateMutation } from "@/hooks/use-private-mutation";
 import type { FinalizeAttemptInput } from "@shared/schema";
+import { throwApiError } from "@/lib/api-error";
 
 const attemptUpdateQueues = new Map<number, Promise<unknown>>();
 const pendingAttemptUpdates = new Map<number, Map<string, Promise<unknown>>>();
@@ -51,7 +52,7 @@ export function useAttempts() {
     queryKey: [api.attempts.list.path],
     queryFn: async ({ signal }) => {
       const res = await apiFetch(api.attempts.list.path, { signal });
-      if (!res.ok) throw new Error("Failed to fetch attempts");
+      if (!res.ok) await throwApiError(res);
       return api.attempts.list.responses[200].parse(await res.json());
     },
   });
@@ -64,9 +65,10 @@ export function useAttempt(id: number | null) {
       if (!id) return null;
       const url = buildUrl(api.attempts.get.path, { id });
       const res = await apiFetch(url, { signal });
-      if (!res.ok) throw new Error("Failed to fetch attempt");
+      if (!res.ok) await throwApiError(res);
       return api.attempts.get.responses[200].parse(await res.json());
     },
+    retry: false,
     enabled: !!id,
   });
 }
@@ -81,7 +83,7 @@ export function useCreateAttempt() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("Failed to create attempt");
+      if (!res.ok) await throwApiError(res);
       return api.attempts.create.responses[201].parse(await res.json());
     },
     onSuccess: () => {
@@ -102,7 +104,7 @@ export function useUpdateAttempt() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(updates),
         });
-        if (!res.ok) throw new Error("Failed to update attempt");
+        if (!res.ok) await throwApiError(res);
         return api.attempts.update.responses[200].parse(await res.json());
       }, `update:${serializeAttemptSnapshot(updates)}`);
     },
@@ -125,7 +127,7 @@ export function useFinalizeAttempt() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
         });
-        if (!res.ok) throw new Error("Failed to finalize attempt");
+        if (!res.ok) await throwApiError(res);
         return api.attempts.finalize.responses[200].parse(await res.json());
       }, `finalize:${serializeAttemptSnapshot(input)}`);
     },
@@ -145,7 +147,7 @@ export function useDeleteAttempt() {
     mutationFn: async (id: number) => {
       const url = buildUrl(api.attempts.delete.path, { id });
       const res = await apiFetch(url, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete attempt");
+      if (!res.ok) await throwApiError(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.attempts.list.path] });

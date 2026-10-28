@@ -23,6 +23,7 @@ const releaseDelayedTests = new Set();
 let delayLogout = false;
 let releaseDelayedLogout;
 let attemptState = null;
+let nextAttemptSnapshot = null;
 let failNextAttemptSave = false;
 let delayAttemptSave = false;
 let releaseAttemptSave;
@@ -36,6 +37,9 @@ let attemptSaveSnapshots = [];
 let results = [];
 let dropNextFinalizeResponse = false;
 let failNextResultsRead = false;
+let missingAttemptQuestion = false;
+let failNextAttemptRead = false;
+let attemptReadCount = 0;
 const attemptQuestions = [
   { id: 11, questionText: "Pregunta de prueba uno", answers: { A: "Correcta", B: "Incorrecta" }, correctAnswer: "A" },
   { id: 12, questionText: "Pregunta de prueba dos", answers: { A: "Incorrecta", B: "Correcta" }, correctAnswer: "B" },
@@ -43,6 +47,8 @@ const attemptQuestions = [
 
 function resetFixture() {
   expired = false;
+  users["account-a"].tests[0] = { id: "account-a-private.json", count: 1, category: "Private A" };
+  users["account-b"].tests[0] = { id: "account-b-private.json", count: 1, category: "Private B" };
   delayedTestsUser = null;
   for (const release of releaseDelayedTests) release();
   releaseDelayedTests.clear();
@@ -50,6 +56,7 @@ function resetFixture() {
   releaseDelayedLogout?.();
   releaseDelayedLogout = undefined;
   attemptState = null;
+  nextAttemptSnapshot = null;
   failNextAttemptSave = false;
   delayAttemptSave = false;
   releaseAttemptSave?.();
@@ -66,6 +73,9 @@ function resetFixture() {
   results = [];
   dropNextFinalizeResponse = false;
   failNextResultsRead = false;
+  missingAttemptQuestion = false;
+  failNextAttemptRead = false;
+  attemptReadCount = 0;
 }
 
 function readJson(request) {
@@ -93,6 +103,29 @@ createServer(async (request, response) => {
   const sid = /(?:^|;\s*)sec05sid=([^;]+)/.exec(request.headers.cookie ?? "")?.[1];
   if (url.pathname === "/__e2e/reset" && request.method === "POST") {
     resetFixture();
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/test-name" && request.method === "POST") {
+    const { testId } = await readJson(request);
+    users["account-a"].tests[0] = { ...users["account-a"].tests[0], id: testId };
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/omit-attempt-question" && request.method === "POST") {
+    missingAttemptQuestion = true;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/restore-attempt-question" && request.method === "POST") {
+    missingAttemptQuestion = false;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/rename-attempt-test" && request.method === "POST") {
+    const { testId } = await readJson(request);
+    users["account-a"].tests[0] = { ...users["account-a"].tests[0], id: testId };
+    if (attemptState) attemptState = { ...attemptState, testId };
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/fail-next-attempt-read" && request.method === "POST") {
+    failNextAttemptRead = true;
     return response.writeHead(204).end();
   }
   if (url.pathname === "/__e2e/delay-tests" && request.method === "POST") {
@@ -174,7 +207,11 @@ createServer(async (request, response) => {
     return response.writeHead(204).end();
   }
   if (url.pathname === "/__e2e/attempt-state" && request.method === "GET") {
-    return respondJson(response, 200, { attemptState, finalizationPayloads, attemptSaveRequests, attemptSaveSnapshots, results, dropNextFinalizeResponse });
+    return respondJson(response, 200, { attemptState, attemptReadCount, failNextAttemptRead, finalizationPayloads, attemptSaveRequests, attemptSaveSnapshots, results, dropNextFinalizeResponse });
+  }
+  if (url.pathname === "/__e2e/seed-next-attempt" && request.method === "POST") {
+    nextAttemptSnapshot = await readJson(request);
+    return response.writeHead(204).end();
   }
   if (url.pathname === "/api/auth/me") {
     const user = expired ? undefined : users[sid];
@@ -206,8 +243,9 @@ createServer(async (request, response) => {
     const testId = decodeURIComponent(url.pathname.slice("/api/tests/".length));
     if (!user) return respondJson(response, 401, { message: "No autenticado" });
     const ownedTest = user.tests.find((test) => test.id === testId);
+    const availableQuestions = missingAttemptQuestion ? attemptQuestions.filter((question) => question.id !== 12) : attemptQuestions;
     return ownedTest
-      ? respondJson(response, 200, attemptQuestions.map((question) => ({ ...question, testId, category: ownedTest.category, userId: user.id })))
+      ? respondJson(response, 200, availableQuestions.map((question) => ({ ...question, testId, category: ownedTest.category, userId: user.id })))
       : respondJson(response, 404, { message: "Test not found" });
   }
   if (url.pathname === "/api/attempts" && request.method === "GET") {
@@ -218,11 +256,17 @@ createServer(async (request, response) => {
     const user = expired ? undefined : users[sid];
     if (!user) return respondJson(response, 401, { message: "No autenticado" });
     const body = await readJson(request);
-    attemptState = { id: 808, ...body, answers: {}, currentIndex: 0, status: "in_progress", userId: user.id };
+    attemptState = { id: 808, ...body, answers: nextAttemptSnapshot?.answers ?? {}, currentIndex: nextAttemptSnapshot?.currentIndex ?? 0, status: "in_progress", userId: user.id };
+    nextAttemptSnapshot = null;
     return respondJson(response, 201, attemptState);
   }
   if (url.pathname === "/api/attempts/808" && request.method === "GET") {
     const user = expired ? undefined : users[sid];
+    attemptReadCount += 1;
+    if (failNextAttemptRead) {
+      failNextAttemptRead = false;
+      return respondJson(response, 503, { message: "Error temporal al recuperar el intento" });
+    }
     return user && attemptState?.userId === user.id
       ? respondJson(response, 200, attemptState)
       : respondJson(response, 404, { message: "Attempt not found" });
@@ -254,6 +298,7 @@ createServer(async (request, response) => {
     const user = expired ? undefined : users[sid];
     if (!user) return respondJson(response, 401, { message: "No autenticado" });
     const body = await readJson(request);
+    if (missingAttemptQuestion) return respondJson(response, 409, { message: "Faltan preguntas del intento" });
     if (delayAttemptFinalize) await new Promise((resolve) => { releaseAttemptFinalize = resolve; });
     let result = results.find((existing) => existing.attemptId === 808);
     if (!result) {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Switch, Route, useLocation, Redirect } from "wouter";
+import { Switch, Route, useLocation, useSearch, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -45,6 +45,8 @@ function AnimatedPage({ children }: { children: React.ReactNode }) {
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const [location] = useLocation();
+  const searchString = useSearch();
   const { isAuthenticated, isLoading } = useAuth();
   
   if (isLoading) {
@@ -56,7 +58,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
   
   if (!isAuthenticated) {
-    return <Redirect to="/login" />;
+    const returnTo = `${location}${searchString ? `?${searchString.replace(/^\?/, "")}` : ""}`;
+    return <Redirect to={`/login?returnTo=${encodeURIComponent(returnTo)}`} />;
   }
   
   return <>{children}</>;
