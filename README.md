@@ -378,3 +378,22 @@ Este proyecto está bajo la Licencia MIT. Ver el archivo [LICENSE](LICENSE) para
 [Solicitar Feature](../../issues)
 
 </div>
+# Actualización de seguridad de la PWA
+
+La actualización SEC-05 usa una nueva versión de caché y elimina las cachés anteriores cuyo nombre pertenece a `opostest-`. Durante la activación solo migra assets same-origin con nombre versionado/hash y MIME estático permitido. Excluye HTML/documentos de navegación, API y assets sin hash; nunca sobrescribe un recurso que ya está en el caché nuevo y deja intactas las cachés de otras aplicaciones.
+
+Al publicar SEC-05, una instalación que aún ejecuta la PWA antigua debe terminar el test y cerrar todas las pestañas y ventanas de OposTest Pro; las versiones anteriores no pueden mostrar el nuevo aviso. El navegador activa el nuevo service worker cuando ya no quedan pestañas controladas por el anterior. Después, vuelve a abrir la app con conexión para cargar la versión nueva. En versiones nuevas, el aviso indica esta operación. No se fuerza una recarga mientras el test está abierto.
+
+En V1 la API necesita conexión. Sus respuestas no se guardan en Cache Storage ni en cachés HTTP; sin conexión se muestra un error reintentable y no se recuperan datos privados guardados por una versión anterior.
+
+La suite Playwright incluye una prueba en Chromium real contra el build de producción. Prepara una caché v1 con HTML antiguo, una respuesta API privada y otra caché ajena; instala/activa v2 y comprueba que una apertura offline devuelve el shell nuevo, además de probar API online/offline, Cache Storage y recursos estáticos.
+
+Las pruebas E2E de sesión se ejecutan contra el build de producción y un servidor en memoria con cuentas ficticias (`account-a` y `account-b`); no usan base de desarrollo ni cuentas reales. Instala Chromium una vez y ejecuta:
+
+```sh
+npx playwright install chromium
+npm run build
+npm run test:browser
+```
+
+El CI instala Chromium con `npx playwright install --with-deps chromium` y ejecuta `npm run test:browser`. Cinco escenarios prueban A → logout → B, dos pestañas, una respuesta tardía de A, sesión caducada y recuperación tras cerrar la pestaña durante logout. Un sexto escenario controla el build de producción con el service worker real. Los casos se ejecutan en serie porque los servidores de prueba mantienen estado en memoria. Las pruebas unitarias cubren además el descarte de escrituras en cola y callbacks de mutaciones de la sesión anterior.

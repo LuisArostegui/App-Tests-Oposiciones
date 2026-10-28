@@ -36,7 +36,7 @@ export default function TestView() {
   const { data: questions, isLoading } = useTest(testId);
   const { mutate: saveResult } = useCreateResult();
   const { mutateAsync: createAttempt } = useCreateAttempt();
-  const { mutate: updateAttempt } = useUpdateAttempt();
+  const { mutate: updateAttempt, mutateAsync: updateAttemptAsync, isPending: isSavingAttempt } = useUpdateAttempt();
   const { data: existingAttempt, isLoading: attemptLoading, isError: attemptError } = useAttempt(attemptIdParam ? Number(attemptIdParam) : null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -210,13 +210,18 @@ export default function TestView() {
     setIsFinished(true);
   };
 
-  const handleSaveAndExit = () => {
+  const handleSaveAndExit = async () => {
     if (attemptId) {
-      updateAttempt({
-        id: attemptId,
-        currentIndex,
-        answers: answers as Record<string, string>,
-      });
+      try {
+        await updateAttemptAsync({
+          id: attemptId,
+          currentIndex,
+          answers: answers as Record<string, string>,
+        });
+      } catch {
+        toast({ title: "Error al guardar", description: "No se pudo confirmar el guardado. Tu test sigue abierto para reintentar.", variant: "destructive" });
+        return;
+      }
       toast({ title: "Progreso Guardado", description: "Puedes continuar este test más tarde desde la página de Historial." });
     }
     setLocation("/results");
@@ -314,7 +319,7 @@ export default function TestView() {
       {/* Top Bar */}
       <div className="flex-shrink-0 z-10 bg-background/80 backdrop-blur-md border-b">
         <div className="max-w-4xl mx-auto px-3 md:px-4 h-12 md:h-16 flex items-center justify-between gap-2">
-          <Button variant="ghost" size="sm" onClick={handleSaveAndExit} data-testid="button-save-exit" className="px-2 md:px-3">
+          <Button variant="ghost" size="sm" onClick={handleSaveAndExit} disabled={isSavingAttempt} data-testid="button-save-exit" className="px-2 md:px-3">
             <Save className="w-4 h-4 md:mr-1" /> <span className="hidden md:inline">Guardar y Salir</span>
           </Button>
           <div className="font-mono font-medium text-sm text-muted-foreground">

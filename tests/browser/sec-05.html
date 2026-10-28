@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="es">
+<meta charset="utf-8">
+<title>SEC-05 service worker browser checks</title>
+<h1>SEC-05 service worker browser checks</h1>
+<pre id="results">Ejecutando…</pre>
+<script type="module">
+const results = document.querySelector("#results");
+const checks = [];
+function check(name, condition, detail = "") {
+  checks.push({ name, passed: Boolean(condition), detail });
+  results.textContent = checks.map(({ name: label, passed, detail: note }) =>
+    `${passed ? "PASS" : "FAIL"} ${label}${note ? ` — ${note}` : ""}`,
+  ).join("\n");
+  if (!condition) throw new Error(name);
+}
+
+async function main() {
+try {
+  results.textContent = `Browser APIs: serviceWorker=${Boolean(navigator.serviceWorker)}, caches=${Boolean(window.caches)}`;
+  await fetch("/__test/online", { method: "POST" });
+  if (!sessionStorage.getItem("sec05-seeded")) {
+    await caches.open("opostest-static-v1").then((cache) => cache.put(
+      "/", new Response("<!doctype html><title>OLD V1 SHELL</title>", { headers: { "Content-Type": "text/html" } }),
+    ));
+    await caches.open("opostest-dynamic-v1").then((cache) => cache.put(
+      "/api/private", new Response("PRIVATE OLD RESPONSE"),
+    ));
+    await caches.open("other-application-cache").then((cache) => cache.put(
+      "/other-app", new Response("keep me"),
+    ));
+    sessionStorage.setItem("sec05-seeded", "yes");
+  }
+
+  results.textContent += "\nRegistering service worker";
+  const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  const worker = registration.installing || registration.waiting || registration.active;
+  if (worker) {
+    results.textContent += `\nWorker state: ${worker.state}`;
+    worker.addEventListener("statechange", () => { results.textContent += `\nWorker state: ${worker.state}`; });
+  }
+  results.textContent += "\nWaiting for activation";
+  await navigator.serviceWorker.ready;
+  if (!navigator.serviceWorker.controller) {
+    location.reload();
+    throw new Error("Reloading once so the browser test page is controlled by the worker");
+  }
+
+  const names = await caches.keys();
+  check("Legacy private API cache removed", !names.includes("opostest-dynamic-v1"));
+  check("Unrelated cache preserved", names.includes("other-application-cache"));
+
+  const apiResponse = await fetch("/api/ok");
+  check("API GET reaches the network", apiResponse.status === 200 && (await apiResponse.json()).source === "network");
+  const apiRequests = (await Promise.all((await caches.keys()).map(async (name) =>
+    (await (await caches.open(name)).keys()).map((request) => new URL(request.url).pathname),
+  ))).flat().filter((pathname) => pathname === "/api" || pathname.startsWith("/api/"));
+  check("API GET is absent from Cache Storage", apiRequests.length === 0);
+
+  const staticResponse = await fetch("/assets/sec05-offline.css");
+  check("Static resource reaches the network", staticResponse.status === 200);
+  await fetch("/__test/offline", { method: "POST" });
+  const offlineStatic = await fetch("/assets/sec05-offline.css");
+  check("Cached static resource remains available offline", (await offlineStatic.text()).includes("cached static fixture"));
+  const offlineApi = await fetch("/api/offline");
+  const offlineBody = await offlineApi.text();
+  check("Offline API fails without stale data or HTML", offlineApi.status === 503 && /offline|conexión/i.test(offlineBody) && !/<html/i.test(offlineBody));
+  await caches.delete("opostest-dynamic-v2");
+  results.dataset.result = "pass";
+} catch (error) {
+  if (error instanceof Error && error.message.startsWith("Reloading once")) return;
+  results.textContent += `\nERROR ${error instanceof Error ? error.message : String(error)}`;
+  results.dataset.result = "fail";
+}
+}
+
+void main();
+</script>

@@ -1,12 +1,31 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
+import { apiFetch, capturePrivateSessionEpoch, isPrivateSessionEpochCurrent } from "@/lib/queryClient";
+import { usePrivateMutation } from "@/hooks/use-private-mutation";
+
+const attemptUpdateQueues = new Map<number, Promise<unknown>>();
+
+export async function enqueueAttemptUpdate<T>(id: number, update: () => Promise<T>): Promise<T> {
+  const sessionEpoch = capturePrivateSessionEpoch();
+  const previous = attemptUpdateQueues.get(id) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(() => {
+    if (!isPrivateSessionEpochCurrent(sessionEpoch)) throw new Error("La sesión cambió antes de guardar este intento.");
+    return update();
+  });
+  attemptUpdateQueues.set(id, current);
+  try {
+    return await current;
+  } finally {
+    if (attemptUpdateQueues.get(id) === current) attemptUpdateQueues.delete(id);
+  }
+}
 
 export function useAttempts() {
   return useQuery({
     queryKey: [api.attempts.list.path],
-    queryFn: async () => {
-      const res = await fetch(api.attempts.list.path);
+    queryFn: async ({ signal }) => {
+      const res = await apiFetch(api.attempts.list.path, { signal });
       if (!res.ok) throw new Error("Failed to fetch attempts");
       return api.attempts.list.responses[200].parse(await res.json());
     },
@@ -16,10 +35,10 @@ export function useAttempts() {
 export function useAttempt(id: number | null) {
   return useQuery({
     queryKey: [api.attempts.get.path, id],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!id) return null;
       const url = buildUrl(api.attempts.get.path, { id });
-      const res = await fetch(url);
+      const res = await apiFetch(url, { signal });
       if (!res.ok) throw new Error("Failed to fetch attempt");
       return api.attempts.get.responses[200].parse(await res.json());
     },
@@ -30,9 +49,9 @@ export function useAttempt(id: number | null) {
 export function useCreateAttempt() {
   const queryClient = useQueryClient();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async (data: { testId: string; questionOrder: number[] }) => {
-      const res = await fetch(api.attempts.create.path, {
+      const res = await apiFetch(api.attempts.create.path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -49,16 +68,18 @@ export function useCreateAttempt() {
 export function useUpdateAttempt() {
   const queryClient = useQueryClient();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async ({ id, ...updates }: { id: number; currentIndex?: number; answers?: Record<string, string>; status?: string; correctCount?: number; score?: number }) => {
       const url = buildUrl(api.attempts.update.path, { id });
-      const res = await fetch(url, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
+      return enqueueAttemptUpdate(id, async () => {
+        const res = await apiFetch(url, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates),
+        });
+        if (!res.ok) throw new Error("Failed to update attempt");
+        return api.attempts.update.responses[200].parse(await res.json());
       });
-      if (!res.ok) throw new Error("Failed to update attempt");
-      return api.attempts.update.responses[200].parse(await res.json());
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: [api.attempts.list.path] });
@@ -71,10 +92,10 @@ export function useDeleteAttempt() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async (id: number) => {
       const url = buildUrl(api.attempts.delete.path, { id });
-      const res = await fetch(url, { method: "DELETE" });
+      const res = await apiFetch(url, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete attempt");
     },
     onSuccess: () => {

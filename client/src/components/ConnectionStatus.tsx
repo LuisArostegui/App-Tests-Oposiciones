@@ -13,7 +13,11 @@ export function ConnectionStatus({ onComplete }: ConnectionStatusProps) {
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
+    const handleOffline = () => {
+      setIsOnline(false);
+      setStatusPhase("result");
+      setShowStatus(true);
+    };
 
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
@@ -22,18 +26,18 @@ export function ConnectionStatus({ onComplete }: ConnectionStatusProps) {
       setStatusPhase("result");
     }, 800);
 
-    const hideTimer = setTimeout(() => {
+    const hideTimer = isOnline ? setTimeout(() => {
       setShowStatus(false);
       onComplete?.();
-    }, 2500);
+    }, 2500) : undefined;
 
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
       clearTimeout(checkTimer);
-      clearTimeout(hideTimer);
+      if (hideTimer) clearTimeout(hideTimer);
     };
-  }, [onComplete]);
+  }, [isOnline, onComplete]);
 
   return (
     <AnimatePresence>
@@ -128,11 +132,20 @@ export function ConnectionStatus({ onComplete }: ConnectionStatusProps) {
                     animate={{ opacity: 1 }}
                     className="text-orange-600 dark:text-orange-400"
                   >
-                    Modo sin conexión
+                    Sin conexión. Los datos privados necesitan conexión para cargarse.
                   </motion.p>
                 )}
               </AnimatePresence>
             </div>
+            {!isOnline && statusPhase === "result" && (
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="rounded-md bg-primary px-5 py-2 text-primary-foreground hover:opacity-90"
+              >
+                Reintentar conexión
+              </button>
+            )}
           </motion.div>
         </motion.div>
       )}

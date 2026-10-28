@@ -28,6 +28,10 @@ export async function createApplication(environment: NodeJS.ProcessEnv = process
   const httpServer = createServer(app);
 
   app.use(createRequestLogger(requestLoggingEnabled));
+  app.use("/api", (_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  });
   app.use(express.json({
     verify: (req, _res, buf) => {
       req.rawBody = buf;

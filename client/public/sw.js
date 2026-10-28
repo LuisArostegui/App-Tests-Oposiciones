@@ -1,6 +1,26 @@
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
+const CACHE_PREFIX = 'opostest-';
 const STATIC_CACHE_NAME = `opostest-static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE_NAME = `opostest-dynamic-${CACHE_VERSION}`;
+const VERSIONED_STATIC_ASSET = /^\/assets\/[A-Za-z0-9_.-]+-[A-Za-z0-9_-]{8,}\.(?:avif|css|gif|ico|jpe?g|js|mjs|otf|png|svg|ttf|webp|woff2?)$/i;
+const SAFE_STATIC_CONTENT_TYPES = new Set([
+  'application/font-woff',
+  'application/javascript',
+  'application/vnd.ms-fontobject',
+  'font/otf',
+  'font/ttf',
+  'font/woff',
+  'font/woff2',
+  'image/avif',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/svg+xml',
+  'image/webp',
+  'image/x-icon',
+  'text/css',
+  'text/javascript',
+]);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -11,21 +31,47 @@ self.addEventListener('install', (event) => {
       ]);
     })
   );
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((name) => name !== STATIC_CACHE_NAME && name !== DYNAMIC_CACHE_NAME)
-          .map((name) => caches.delete(name))
-      );
-    })
+    migrateAndCleanCaches()
   );
-  self.clients.claim();
 });
+
+async function migrateAndCleanCaches() {
+  const cacheNames = await caches.keys();
+  const staticCache = await caches.open(STATIC_CACHE_NAME);
+  const oldAppCaches = cacheNames.filter((name) => name.startsWith(CACHE_PREFIX)
+    && name !== STATIC_CACHE_NAME
+    && name !== DYNAMIC_CACHE_NAME);
+
+  for (const cacheName of oldAppCaches) {
+    if (!cacheName.startsWith(`${CACHE_PREFIX}static-`) && !cacheName.startsWith(`${CACHE_PREFIX}dynamic-`)) {
+      continue;
+    }
+    const oldCache = await caches.open(cacheName);
+    for (const request of await oldCache.keys()) {
+      const url = new URL(request.url);
+      if (request.method !== 'GET'
+        || request.mode === 'navigate'
+        || url.origin !== self.location.origin
+        || url.pathname === '/api'
+        || url.pathname.startsWith('/api/')
+        || !VERSIONED_STATIC_ASSET.test(url.pathname)) continue;
+
+      const response = await oldCache.match(request);
+      if (!response?.ok) continue;
+      const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+      if (!contentType || !SAFE_STATIC_CONTENT_TYPES.has(contentType)) continue;
+      if (await staticCache.match(request)) continue;
+
+      await staticCache.put(request, response);
+    }
+  }
+
+  await Promise.all(oldAppCaches.map((name) => caches.delete(name)));
+}
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
@@ -35,8 +81,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(networkFirst(request));
+  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+    event.respondWith(networkOnly(request));
   } else if (request.mode === 'navigate') {
     event.respondWith(navigationHandler(request));
   } else {
@@ -47,11 +93,15 @@ self.addEventListener('fetch', (event) => {
 async function navigationHandler(request) {
   try {
     const networkResponse = await fetch(request);
-    const cache = await caches.open(DYNAMIC_CACHE_NAME);
-    cache.put('/', networkResponse.clone());
+    if (networkResponse.ok) {
+      const cache = await caches.open(DYNAMIC_CACHE_NAME);
+      await cache.put('/', networkResponse.clone());
+    }
     return networkResponse;
   } catch (error) {
-    const cachedResponse = await caches.match('/');
+    const staticCache = await caches.open(STATIC_CACHE_NAME);
+    const dynamicCache = await caches.open(DYNAMIC_CACHE_NAME);
+    const cachedResponse = await dynamicCache.match('/') || await staticCache.match('/');
     if (cachedResponse) {
       return cachedResponse;
     }
@@ -63,12 +113,14 @@ async function navigationHandler(request) {
 }
 
 async function staleWhileRevalidate(request) {
-  const cachedResponse = await caches.match(request);
+  const staticCache = await caches.open(STATIC_CACHE_NAME);
+  const dynamicCache = await caches.open(DYNAMIC_CACHE_NAME);
+  const cachedResponse = await staticCache.match(request) || await dynamicCache.match(request);
   
   const fetchPromise = fetch(request).then((networkResponse) => {
     if (networkResponse.ok) {
       const responseClone = networkResponse.clone();
-      caches.open(DYNAMIC_CACHE_NAME).then((cache) => {
+      caches.open(STATIC_CACHE_NAME).then((cache) => {
         cache.put(request, responseClone);
       });
     }
@@ -78,25 +130,13 @@ async function staleWhileRevalidate(request) {
   return cachedResponse || await fetchPromise || new Response('Offline', { status: 503 });
 }
 
-async function networkFirst(request) {
+async function networkOnly(request) {
   try {
-    const networkResponse = await fetch(request);
-    if (networkResponse.ok) {
-      const cache = await caches.open(DYNAMIC_CACHE_NAME);
-      cache.put(request, networkResponse.clone());
-    }
-    return networkResponse;
-  } catch (error) {
-    const cachedResponse = await caches.match(request);
-    if (cachedResponse) {
-      return cachedResponse;
-    }
+    return await fetch(request);
+  } catch {
     return new Response(
-      JSON.stringify({ error: 'Sin conexión', offline: true }),
-      { 
-        status: 503, 
-        headers: { 'Content-Type': 'application/json' } 
-      }
+      JSON.stringify({ message: 'Sin conexión. Comprueba la conexión y vuelve a intentarlo.', offline: true }),
+      { status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } }
     );
   }
 }
@@ -148,9 +188,3 @@ function getOfflineHTML() {
 </body>
 </html>`;
 }
-
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-});

@@ -1,6 +1,8 @@
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest, getQueryFn } from "@/lib/queryClient";
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { queryClient, apiRequest, getQueryFn, clearPrivateQueryData, beginPrivateSessionTransition, finishPrivateSessionTransition, recoverInterruptedSessionTransitions, setSessionTransition, isSessionTransitioning } from "@/lib/queryClient";
 import { useLocation } from "wouter";
+import { usePrivateMutation } from "@/hooks/use-private-mutation";
 
 interface User {
   id: number;
@@ -19,42 +21,90 @@ interface RegisterData {
 
 export function useAuth() {
   const [, setLocation] = useLocation();
+  const [sessionVersion, setSessionVersion] = useState(0);
+
+  useEffect(() => {
+    const handleSessionChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ transitioning?: boolean }>).detail;
+      if (detail?.transitioning !== undefined) setSessionTransition(detail.transitioning);
+      setSessionVersion((version) => version + 1);
+    };
+    window.addEventListener("opostest:session-changed", handleSessionChange);
+    return () => window.removeEventListener("opostest:session-changed", handleSessionChange);
+  }, []);
 
   const { data: user, isLoading } = useQuery<User | null>({
-    queryKey: ["/api/auth/me"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
+    queryKey: ["/api/auth/me", sessionVersion],
+    queryFn: async (context) => isSessionTransitioning()
+      ? recoverInterruptedSessionTransitions(async () => await getQueryFn<User>({ on401: "returnNull" })({ ...context, queryKey: ["/api/auth/me"] }))
+      : getQueryFn<User>({ on401: "returnNull" })({ ...context, queryKey: ["/api/auth/me"] }),
     retry: false,
     staleTime: Infinity,
+    refetchInterval: () => isSessionTransitioning() ? 5_000 : false,
   });
 
-  const loginMutation = useMutation({
+  const wasAuthenticated = useRef(false);
+  useEffect(() => {
+    if (isSessionTransitioning()) {
+      if (user === null) wasAuthenticated.current = false;
+      return;
+    }
+    if (user) {
+      wasAuthenticated.current = true;
+    } else if (user === null && wasAuthenticated.current) {
+      wasAuthenticated.current = false;
+      void clearPrivateQueryData();
+    }
+  }, [user]);
+
+  const loginMutation = usePrivateMutation({
+    meta: { sessionTransition: true },
+    onMutate: () => beginPrivateSessionTransition(),
     mutationFn: async (data: LoginData) => {
       const res = await apiRequest("POST", "/api/auth/login", data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: async (_data, _variables, transitionId) => {
+      await finishPrivateSessionTransition(transitionId);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    },
+    onError: async (_error, _variables, transitionId) => {
+      await finishPrivateSessionTransition(transitionId);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     },
   });
 
-  const registerMutation = useMutation({
+  const registerMutation = usePrivateMutation({
+    meta: { sessionTransition: true },
+    onMutate: () => beginPrivateSessionTransition(),
     mutationFn: async (data: RegisterData) => {
       const res = await apiRequest("POST", "/api/auth/register", data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: async (_data, _variables, transitionId) => {
+      await finishPrivateSessionTransition(transitionId);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    },
+    onError: async (_error, _variables, transitionId) => {
+      await finishPrivateSessionTransition(transitionId);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     },
   });
 
-  const logoutMutation = useMutation({
+  const logoutMutation = usePrivateMutation({
+    meta: { sessionTransition: true },
+    onMutate: () => beginPrivateSessionTransition(),
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/auth/logout", {});
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.clear();
+    onSuccess: async (_data, _variables, transitionId) => {
+      await finishPrivateSessionTransition(transitionId);
       setLocation("/login");
+    },
+    onError: async (_error, _variables, transitionId) => {
+      await finishPrivateSessionTransition(transitionId);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     },
   });
 
