@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, QUESTION_IMPORT_MAX_BYTES, questionImportContentSchema, questionImportFilenameSchema } from "@shared/routes";
 
-function formatImportIssues(issues: { path: (string | number)[]; message: string }[]): string {
+function formatImportIssues(issues: { path: PropertyKey[]; message: string }[]): string {
   const fieldNames: Record<string, string> = {
     filename: "nombre",
     pregunta: "pregunta",

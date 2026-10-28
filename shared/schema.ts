@@ -67,18 +67,18 @@ export const insertAttemptSchema = createInsertSchema(testAttempts).omit({ id: t
 
 export const updateQuestionSchema = z.object({
   questionText: z.string().optional(),
-  answers: z.record(z.string()).optional(),
+  answers: z.record(z.string(), z.string()).optional(),
   correctAnswer: z.string().optional(),
   category: z.string().nullable().optional(),
 }).strict();
 
 export const updateAttemptSchema = z.object({
   currentIndex: z.number().int().nonnegative().optional(),
-  answers: z.record(z.string()).optional(),
+  answers: z.record(z.string(), z.string()).optional(),
 }).strict();
 
 export const finalizeAttemptSchema = z.object({
-  answers: z.record(z.string()),
+  answers: z.record(z.string(), z.string()),
 }).strict();
 
 // Login schema (same as insert but for clarity)
