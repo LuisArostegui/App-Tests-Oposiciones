@@ -154,6 +154,18 @@ jobs:
       - name: Start isolated PostgreSQL with its test volume
         run: docker compose -f compose.prod.yaml -f compose.infra-test.yaml up -d postgres
 
+      - name: Wait for PostgreSQL readiness
+        shell: bash
+        run: |
+          for attempt in $(seq 1 60); do
+            if docker compose -f compose.prod.yaml -f compose.infra-test.yaml exec -T postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f compose.prod.yaml -f compose.infra-test.yaml logs postgres
+          exit 1
+
       - name: Run migration integration checks against disposable databases
         run: npm run test:infra-migrations
 
