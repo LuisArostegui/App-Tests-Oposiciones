@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction, QueryCache, MutationCache } from "@tanstack/react-query";
+import { ApiError } from "@/lib/api-error";
 
 const SESSION_EVENT = "opostest:session-changed";
 const SESSION_STORAGE_KEY = "opostest:session-change";
@@ -220,7 +221,10 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
   try {
     const res = await fetch(input, { credentials: "include", ...init, ...(controller ? { signal: controller.signal } : {}) });
     if (isWrite && !isPrivateSessionEpochCurrent(epoch)) throw new Error("La sesión cambió mientras se guardaban estos datos.");
-    if (res.status === 401) throw new Error("401: La sesión ha caducado. Inicia sesión de nuevo.");
+    if (res.status === 401) {
+      void queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      throw new ApiError(401, "La sesión ha caducado. Inicia sesión de nuevo.");
+    }
     return res;
   } finally {
     if (controller) {

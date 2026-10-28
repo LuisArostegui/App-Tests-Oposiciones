@@ -21,6 +21,9 @@ export type FinalizeAttemptOutcome =
   | { status: "completed"; result: Result }
   | { status: "not_found" | "conflict" | "missing_questions" | "invalid_answers" };
 
+export type RenameTestOutcome = "renamed" | "not_found" | "name_conflict";
+export type DeleteTestOutcome = "deleted" | "not_found" | "in_progress";
+
 function serializeAnswers(answers: Record<string, string>): string {
   return JSON.stringify(Object.fromEntries(Object.entries(answers).sort(([first], [second]) => first.localeCompare(second))));
 }
@@ -38,8 +41,8 @@ export interface IStorage {
   createQuestion(userId: number, question: InsertQuestion): Promise<Question>;
   updateQuestion(id: number, userId: number, question: UpdateQuestion): Promise<Question | undefined>;
   deleteQuestion(id: number, userId: number): Promise<boolean>;
-  deleteTest(testId: string, userId: number): Promise<boolean>;
-  renameTest(oldTestId: string, newTestId: string, userId: number): Promise<boolean>;
+  deleteTest(testId: string, userId: number): Promise<DeleteTestOutcome>;
+  renameTest(oldTestId: string, newTestId: string, userId: number): Promise<RenameTestOutcome>;
   
   // Results
   getResults(userId: number): Promise<Result[]>;
@@ -93,12 +96,20 @@ export class DatabaseStorage implements IStorage {
 
   async createQuestions(userId: number, questionsList: InsertQuestion[]): Promise<void> {
     if (questionsList.length === 0) return;
-    await db.insert(questions).values(questionsList.map(question => ({ ...question, userId })));
+    await db.transaction(async (tx) => {
+      const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
+      if (!owner) return;
+      await tx.insert(questions).values(questionsList.map(question => ({ ...question, userId })));
+    });
   }
 
   async createQuestion(userId: number, question: InsertQuestion): Promise<Question> {
-    const [created] = await db.insert(questions).values({ ...question, userId }).returning();
-    return created;
+    return db.transaction(async (tx) => {
+      const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
+      if (!owner) throw new Error("El propietario del test no existe");
+      const [created] = await tx.insert(questions).values({ ...question, userId }).returning();
+      return created;
+    });
   }
 
   async updateQuestion(id: number, userId: number, update: UpdateQuestion): Promise<Question | undefined> {
@@ -118,19 +129,58 @@ export class DatabaseStorage implements IStorage {
     return deleted.length > 0;
   }
 
-  async deleteTest(testId: string, userId: number): Promise<boolean> {
-    const deleted = await db.delete(questions).where(
-      and(eq(questions.testId, testId), eq(questions.userId, userId))
-    ).returning({ id: questions.id });
-    return deleted.length > 0;
+  async deleteTest(testId: string, userId: number): Promise<DeleteTestOutcome> {
+    return db.transaction(async (tx): Promise<DeleteTestOutcome> => {
+      const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
+      if (!owner) return "not_found";
+
+      const [existingTest] = await tx.select({ id: questions.id }).from(questions).where(and(
+        eq(questions.testId, testId), eq(questions.userId, userId),
+      )).limit(1);
+      if (!existingTest) return "not_found";
+
+      const [activeAttempt] = await tx.select({ id: testAttempts.id }).from(testAttempts).where(and(
+        eq(testAttempts.testId, testId),
+        eq(testAttempts.userId, userId),
+        eq(testAttempts.status, "in_progress"),
+      )).limit(1);
+      if (activeAttempt) return "in_progress";
+
+      await tx.delete(questions).where(and(
+        eq(questions.testId, testId), eq(questions.userId, userId),
+      ));
+      return "deleted";
+    });
   }
 
-  async renameTest(oldTestId: string, newTestId: string, userId: number): Promise<boolean> {
-    const renamed = await db.update(questions)
-      .set({ testId: newTestId })
-      .where(and(eq(questions.testId, oldTestId), eq(questions.userId, userId)))
-      .returning({ id: questions.id });
-    return renamed.length > 0;
+  async renameTest(oldTestId: string, newTestId: string, userId: number): Promise<RenameTestOutcome> {
+    return db.transaction(async (tx): Promise<RenameTestOutcome> => {
+      const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
+      if (!owner) return "not_found";
+
+      const [existingTest] = await tx.select({ id: questions.id }).from(questions).where(and(
+        eq(questions.testId, oldTestId), eq(questions.userId, userId),
+      )).limit(1);
+      if (!existingTest) return "not_found";
+
+      if (oldTestId !== newTestId) {
+        const [nameCollision] = await tx.select({ id: questions.id }).from(questions).where(and(
+          eq(questions.testId, newTestId), eq(questions.userId, userId),
+        )).limit(1);
+        if (nameCollision) return "name_conflict";
+      }
+
+      await tx.update(questions).set({ testId: newTestId }).where(and(
+        eq(questions.testId, oldTestId), eq(questions.userId, userId),
+      ));
+      await tx.update(testAttempts).set({ testId: newTestId }).where(and(
+        eq(testAttempts.testId, oldTestId), eq(testAttempts.userId, userId),
+      ));
+      await tx.update(results).set({ testId: newTestId }).where(and(
+        eq(results.testId, oldTestId), eq(results.userId, userId),
+      ));
+      return "renamed";
+    });
   }
 
   // Results
@@ -172,6 +222,9 @@ export class DatabaseStorage implements IStorage {
     }
 
     return db.transaction(async (tx) => {
+      const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
+      if (!owner) return undefined;
+
       const verified = await tx.select({ id: questions.id }).from(questions).where(and(
         eq(questions.testId, testId),
         eq(questions.userId, userId),

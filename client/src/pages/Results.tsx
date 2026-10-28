@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ArrowLeft, Trophy, Calendar, CheckCircle, Play, Trash2, Clock, AlertCircle } from "lucide-react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
+import { buildTestUrl } from "@shared/routes";
 import {
   LineChart,
   Line,
@@ -53,7 +54,7 @@ export default function Results() {
   const isLoading = resultsLoading || attemptsLoading;
 
   const handleContinue = (attempt: typeof inProgressAttempts[0]) => {
-    setLocation(`/test/${encodeURIComponent(attempt.testId)}?attempt=${attempt.id}`);
+    setLocation(buildTestUrl(attempt.testId, attempt.id));
   };
 
   const handleDeleteAttempt = (id: number, testId: string) => {

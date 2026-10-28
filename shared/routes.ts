@@ -56,18 +56,20 @@ export const api = {
       responses: {
         204: z.void(),
         404: errorSchemas.notFound,
+        409: errorSchemas.conflict,
       },
     },
     rename: {
       method: 'PUT' as const,
       path: '/api/tests/:id/rename',
       input: z.object({
-        newName: z.string().min(1),
+        newName: z.string().trim().min(1),
       }),
       responses: {
         200: z.object({ success: z.boolean(), newId: z.string() }),
         400: errorSchemas.validation,
         404: errorSchemas.notFound,
+        409: errorSchemas.conflict,
       },
     },
   },
@@ -191,8 +193,23 @@ export function buildUrl(path: string, params?: Record<string, string | number>)
   let url = path;
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
-      url = url.replace(`:${key}`, String(value));
+      url = url.replace(`:${key}`, encodeURIComponent(String(value)));
     });
   }
   return url;
+}
+
+export function buildTestUrl(testId: string, attemptId?: number): string {
+  const path = buildUrl("/test/:id", { id: testId });
+  return attemptId === undefined ? path : `${path}?${new URLSearchParams({ attempt: String(attemptId) })}`;
+}
+
+export function decodeTestIdFromPathname(pathname: string): string {
+  const match = pathname.match(/^\/test\/([^/]+)\/?$/);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }

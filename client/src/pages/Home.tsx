@@ -36,6 +36,7 @@ import {
 import { FileText, BarChart3, ChevronRight, Trash2, Pencil, Edit3, LogOut, User } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
+import { buildTestUrl, buildUrl } from "@shared/routes";
 
 export default function Home() {
   const { data: tests, isLoading: loadingTests } = useTests();
@@ -67,7 +68,7 @@ export default function Home() {
   const handleEditClick = (testId: string) => {
     // Forzar la limpieza del pointer-events
     document.body.style.pointerEvents = '';
-    navigate(`/admin?test=${encodeURIComponent(testId)}`);
+    navigate(buildUrl("/admin?test=:id", { id: testId }));
   };
 
   const confirmDelete = () => {
@@ -171,7 +172,7 @@ export default function Home() {
                   >
                     <ContextMenu>
                       <ContextMenuTrigger asChild>
-                        <Link href={`/test/${test.id}`} className="group block h-full" data-testid={`link-test-${test.id}`}>
+                        <Link href={buildTestUrl(test.id)} className="group block h-full" data-testid={`link-test-${test.id}`}>
                           <Card className="h-full hover:shadow-xl hover:border-primary/50 transition-all duration-300 overflow-hidden relative">
                             <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-primary to-accent opacity-0 group-hover:opacity-100 transition-opacity" />
                             <CardHeader>

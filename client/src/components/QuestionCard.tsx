@@ -71,6 +71,7 @@ export function QuestionCard({
               }}
               onClick={() => !showFeedback && !disabled && onSelectAnswer(key)}
               disabled={showFeedback || disabled}
+              aria-pressed={isSelected}
               className={cn(
                 "w-full text-left rounded-xl border-2 transition-all duration-200 relative group flex items-start gap-2 md:gap-4",
                 compact ? "p-2.5 md:p-4" : "p-4",

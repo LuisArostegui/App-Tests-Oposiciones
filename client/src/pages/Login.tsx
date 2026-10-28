@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation, Link } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -11,10 +11,15 @@ import { LogIn, User, Lock, Loader2 } from "lucide-react";
 
 export default function Login() {
   const [, setLocation] = useLocation();
+  const searchString = useSearch();
   const { login, isLoggingIn } = useAuth();
   const { toast } = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const requestedReturnTo = new URLSearchParams(searchString).get("returnTo");
+  const returnTo = requestedReturnTo?.startsWith("/") && !requestedReturnTo.startsWith("//")
+    ? requestedReturnTo
+    : "/";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,7 +30,7 @@ export default function Login() {
         title: "Bienvenido",
         description: "Has iniciado sesión correctamente",
       });
-      setLocation("/");
+      setLocation(returnTo);
     } catch (err: any) {
       const message = err?.message || "Error al iniciar sesión";
       toast({

@@ -221,14 +221,14 @@ for (const [name, read] of [
   test(`${name} with zero owner returns no rows`, async () => assert.deepEqual(await read(), []));
 }
 
-for (const [name, key, mutate] of [
-  ["renameTest", "zeroRename", () => storage.renameTest(testIds.zeroRename, `zero-renamed-${suffix}.json`, 0)],
-  ["deleteTest", "zeroDelete", () => storage.deleteTest(testIds.zeroDelete, 0)],
+for (const [name, key, mutate, expected] of [
+  ["renameTest", "zeroRename", () => storage.renameTest(testIds.zeroRename, `zero-renamed-${suffix}.json`, 0), "not_found"],
+  ["deleteTest", "zeroDelete", () => storage.deleteTest(testIds.zeroDelete, 0), "not_found"],
 ] as const) {
   test(`${name} with zero owner leaves both users' rows intact`, async () => {
     const beforeRows = await Promise.all(names.map(person => question(fixtures[person][key])));
     assert.ok(beforeRows.every(Boolean));
-    assert.equal(await mutate(), false);
+    assert.equal(await mutate(), expected);
     const afterRows = await Promise.all(names.map(person => question(fixtures[person][key])));
     assert.deepEqual(afterRows, beforeRows);
   });

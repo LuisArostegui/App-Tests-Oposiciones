@@ -4,6 +4,7 @@ import { z } from "zod";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/queryClient";
 import { usePrivateMutation } from "@/hooks/use-private-mutation";
+import { throwApiError } from "@/lib/api-error";
 
 // Fetch list of local tests
 export function useTests() {
@@ -24,9 +25,10 @@ export function useTest(id: string) {
     queryFn: async ({ signal }) => {
       const url = buildUrl(api.tests.get.path, { id });
       const res = await apiFetch(url, { signal });
-      if (!res.ok) throw new Error("Failed to fetch test details");
+      if (!res.ok) await throwApiError(res);
       return api.tests.get.responses[200].parse(await res.json());
     },
+    retry: false,
     enabled: !!id,
   });
 }
@@ -44,10 +46,7 @@ export function useImportTest() {
         body: JSON.stringify({ filename, content }),
       });
       
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.message || "Failed to import test");
-      }
+      if (!res.ok) await throwApiError(res);
       return api.tests.import.responses[201].parse(await res.json());
     },
     onSuccess: (data) => {
@@ -131,7 +130,7 @@ export function useDeleteQuestion() {
       queryClient.invalidateQueries({ queryKey: [api.tests.get.path] });
       toast({ title: "Pregunta Eliminada" });
     },
-    onError: () => toast({ title: "Error al Eliminar", variant: "destructive" }),
+    onError: (error: Error) => toast({ title: "No se pudo eliminar el test", description: error.message, variant: "destructive" }),
   });
 }
 
@@ -144,7 +143,7 @@ export function useDeleteTest() {
     mutationFn: async (testId: string) => {
       const url = buildUrl(api.tests.delete.path, { id: testId });
       const res = await apiFetch(url, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete test");
+      if (!res.ok) await throwApiError(res);
       return testId;
     },
     onSuccess: (deletedTestId) => {
@@ -154,7 +153,7 @@ export function useDeleteTest() {
       queryClient.invalidateQueries({ queryKey: [api.tests.get.path, deletedTestId] });
       toast({ title: "Test Eliminado" });
     },
-    onError: () => toast({ title: "Error al Eliminar", variant: "destructive" }),
+    onError: (error: Error) => toast({ title: "No se pudo borrar el test", description: error.message, variant: "destructive" }),
   });
 }
 
@@ -170,7 +169,7 @@ export function useRenameTest() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ newName }),
       });
-      if (!res.ok) throw new Error("Failed to rename test");
+      if (!res.ok) await throwApiError(res);
       const result = api.tests.rename.responses[200].parse(await res.json());
       return { oldTestId: testId, ...result };
     },
@@ -181,8 +180,10 @@ export function useRenameTest() {
       queryClient.invalidateQueries({ queryKey: [api.tests.get.path, data.oldTestId] });
       // Also invalidate any query for the new test ID
       queryClient.invalidateQueries({ queryKey: [api.tests.get.path, data.newId] });
+      queryClient.invalidateQueries({ queryKey: [api.attempts.list.path] });
+      queryClient.invalidateQueries({ queryKey: [api.results.list.path] });
       toast({ title: "Test Renombrado" });
     },
-    onError: () => toast({ title: "Error al Renombrar", variant: "destructive" }),
+    onError: (error: Error) => toast({ title: "No se pudo renombrar el test", description: error.message, variant: "destructive" }),
   });
 }
