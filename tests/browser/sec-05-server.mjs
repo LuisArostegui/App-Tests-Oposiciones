@@ -17,8 +17,22 @@ const mimeTypes = {
   ".svg": "image/svg+xml",
 };
 
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://localhost:4174");
+  if (url.pathname === "/__test/shutdown" && request.method === "POST") {
+    if (request.headers["x-test-run-id"] !== process.env.BROWSER_FIXTURE_OWNER) {
+      response.writeHead(403).end();
+      return;
+    }
+    response.writeHead(204).end();
+    server.close((error) => {
+      if (error) {
+        console.error(`No se pudo cerrar el fixture SEC-05 (${error.message}).`);
+        process.exitCode = 1;
+      }
+    });
+    return;
+  }
   if (request.method === "POST" && url.pathname === "/__test/online") {
     offline = false;
     response.writeHead(204).end();
@@ -64,6 +78,8 @@ createServer(async (request, response) => {
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
   }
-}).listen(4174, "127.0.0.1", () => {
+});
+
+server.listen(4174, "127.0.0.1", () => {
   console.log("SEC-05 browser fixture: http://localhost:4174/sec05-browser-test.html");
 });

@@ -208,7 +208,7 @@ export class DatabaseStorage implements IStorage {
   async getResults(userId: number): Promise<Result[]> {
     return await db.select().from(results)
       .where(eq(results.userId, userId))
-      .orderBy(desc(results.completedAt));
+      .orderBy(desc(results.completedAt), desc(results.id));
   }
 
   async createResult(userId: number, result: InsertResult): Promise<Result> {

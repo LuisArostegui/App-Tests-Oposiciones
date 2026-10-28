@@ -18,7 +18,7 @@ jobs:
   validation:
     name: Typecheck, tests and build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -35,8 +35,23 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      postgres-rel01:
+        image: postgres:17
+        env:
+          POSTGRES_USER: rel01_test
+          POSTGRES_PASSWORD: rel01_ci_test_password
+          POSTGRES_DB: rel01_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U rel01_test -d rel01_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       TEST_DATABASE_URL: postgresql://opostest_test:ci_test_password@127.0.0.1:5432/opostest_test
+      REL01_DATABASE_URL: postgresql://rel01_test:rel01_ci_test_password@127.0.0.1:5433/rel01_test
 
     steps:
       - name: Checkout
@@ -65,3 +80,6 @@ jobs:
 
       - name: Browser tests
         run: npm run test:browser
+
+      - name: REL-01 real API and PostgreSQL flows
+        run: npm run test:rel01

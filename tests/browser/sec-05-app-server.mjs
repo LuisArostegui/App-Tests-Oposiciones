@@ -98,9 +98,23 @@ function respondJson(response, status, payload, headers = {}) {
   response.end(JSON.stringify(payload));
 }
 
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://localhost:4175");
   const sid = /(?:^|;\s*)sec05sid=([^;]+)/.exec(request.headers.cookie ?? "")?.[1];
+  if (url.pathname === "/__test/shutdown" && request.method === "POST") {
+    if (request.headers["x-test-run-id"] !== process.env.BROWSER_FIXTURE_OWNER) {
+      response.writeHead(403).end();
+      return;
+    }
+    response.writeHead(204).end();
+    server.close((error) => {
+      if (error) {
+        console.error(`No se pudo cerrar el fixture de aplicación SEC-05 (${error.message}).`);
+        process.exitCode = 1;
+      }
+    });
+    return;
+  }
   if (url.pathname === "/__e2e/reset" && request.method === "POST") {
     resetFixture();
     return response.writeHead(204).end();
@@ -345,6 +359,8 @@ createServer(async (request, response) => {
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
   }
-}).listen(4175, "127.0.0.1", () => {
+});
+
+server.listen(4175, "127.0.0.1", () => {
   console.log("SEC-05 app fixture: http://localhost:4175/login");
 });
