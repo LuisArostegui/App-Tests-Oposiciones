@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { forwardTerminationSignals } from "./forward-termination-signals.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const mode = process.argv[2];
@@ -19,6 +20,8 @@ const child = spawn(process.execPath, args, {
   env: { ...process.env, NODE_ENV: mode },
   stdio: "inherit",
 });
+
+forwardTerminationSignals(child);
 
 child.on("error", (error) => {
   console.error(`No se pudo iniciar el servidor: ${error.message}`);
