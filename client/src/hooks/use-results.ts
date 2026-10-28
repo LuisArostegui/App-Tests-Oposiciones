@@ -1,8 +1,9 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@shared/routes";
 import type { InsertResult } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/queryClient";
+import { usePrivateMutation } from "@/hooks/use-private-mutation";
 
 export function useResults() {
   return useQuery({
@@ -19,7 +20,7 @@ export function useCreateResult() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async (data: InsertResult) => {
       const res = await apiFetch(api.results.create.path, {
         method: "POST",

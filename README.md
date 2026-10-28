@@ -386,6 +386,14 @@ Al publicar SEC-05, una instalación que aún ejecuta la PWA antigua debe termin
 
 En V1 la API necesita conexión. Sus respuestas no se guardan en Cache Storage ni en cachés HTTP; sin conexión se muestra un error reintentable y no se recuperan datos privados guardados por una versión anterior.
 
-Para repetir las comprobaciones reales en Chrome después de `npm run build`, inicia `node tests/browser/sec-05-server.mjs` y abre `http://localhost:4174/sec05-browser-test.html`. La página precarga una caché v1 privada, conserva una caché ajena y comprueba API online/offline y recursos estáticos contra el service worker del build. Para el flujo de sesiones con cuentas ficticias, inicia `node tests/browser/sec-05-app-server.mjs` y abre `http://localhost:4175/login` en dos pestañas; usa `account-a` y `account-b` con cualquier contraseña de prueba, sin una base de datos.
+La suite Playwright incluye una prueba en Chromium real contra el build de producción. Prepara una caché v1 privada y otra ajena, actualiza el service worker y comprueba API online/offline, Cache Storage y recursos estáticos.
 
-El flujo de login/logout A → B en dos pestañas requiere comprobación manual y no forma parte de `npm test` ni del CI. No se completó esa interacción de UI en esta validación; las pruebas automáticas cubren cancelación/limpieza del estado de consulta y la coordinación de transiciones entre pestañas.
+Las pruebas E2E de sesión se ejecutan contra el build de producción y un servidor en memoria con cuentas ficticias (`account-a` y `account-b`); no usan base de desarrollo ni cuentas reales. Instala Chromium una vez y ejecuta:
+
+```sh
+npx playwright install chromium
+npm run build
+npm run test:browser
+```
+
+El CI instala Chromium con `npx playwright install --with-deps chromium` y ejecuta `npm run test:browser`. Cinco escenarios prueban A → logout → B, dos pestañas, una respuesta tardía de A, sesión caducada y recuperación tras cerrar la pestaña durante logout. Un sexto escenario controla el build de producción con el service worker real. Los casos se ejecutan en serie porque los servidores de prueba mantienen estado en memoria. Las pruebas unitarias cubren además el descarte de escrituras en cola y callbacks de mutaciones de la sesión anterior.

@@ -1,13 +1,18 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
-import { apiFetch } from "@/lib/queryClient";
+import { apiFetch, capturePrivateSessionEpoch, isPrivateSessionEpochCurrent } from "@/lib/queryClient";
+import { usePrivateMutation } from "@/hooks/use-private-mutation";
 
 const attemptUpdateQueues = new Map<number, Promise<unknown>>();
 
 export async function enqueueAttemptUpdate<T>(id: number, update: () => Promise<T>): Promise<T> {
+  const sessionEpoch = capturePrivateSessionEpoch();
   const previous = attemptUpdateQueues.get(id) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(update);
+  const current = previous.catch(() => undefined).then(() => {
+    if (!isPrivateSessionEpochCurrent(sessionEpoch)) throw new Error("La sesión cambió antes de guardar este intento.");
+    return update();
+  });
   attemptUpdateQueues.set(id, current);
   try {
     return await current;
@@ -44,7 +49,7 @@ export function useAttempt(id: number | null) {
 export function useCreateAttempt() {
   const queryClient = useQueryClient();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async (data: { testId: string; questionOrder: number[] }) => {
       const res = await apiFetch(api.attempts.create.path, {
         method: "POST",
@@ -63,7 +68,7 @@ export function useCreateAttempt() {
 export function useUpdateAttempt() {
   const queryClient = useQueryClient();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async ({ id, ...updates }: { id: number; currentIndex?: number; answers?: Record<string, string>; status?: string; correctCount?: number; score?: number }) => {
       const url = buildUrl(api.attempts.update.path, { id });
       return enqueueAttemptUpdate(id, async () => {
@@ -87,7 +92,7 @@ export function useDeleteAttempt() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async (id: number) => {
       const url = buildUrl(api.attempts.delete.path, { id });
       const res = await apiFetch(url, { method: "DELETE" });

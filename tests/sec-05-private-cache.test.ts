@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { test } from "node:test";
-import { applyPersistedSessionTransition, beginPrivateSessionTransition, clearPrivateQueryData, finishPrivateSessionTransition, isSessionTransitioning, queryClient, receivePrivateSessionMessage } from "../client/src/lib/queryClient";
+import { applyPersistedSessionTransition, beginPrivateSessionTransition, capturePrivateSessionEpoch, clearPrivateQueryData, finishPrivateSessionTransition, interruptSessionTransition, isPrivateSessionEpochCurrent, isSessionTransitioning, queryClient, receivePrivateSessionMessage, recoverInterruptedSessionTransitions } from "../client/src/lib/queryClient";
+import { withPrivateMutationCallbacks } from "../client/src/hooks/use-private-mutation";
 import { enqueueAttemptUpdate } from "../client/src/hooks/use-attempts";
 
 type WorkerEvent = {
@@ -177,6 +178,103 @@ test("SEC-05: per-transition storage phases ignore late starts and preserve conc
   assert.equal(isSessionTransitioning(), false);
 });
 
+test("SEC-05: an interrupted persisted transition stays blocked until server identity revalidation succeeds", async () => {
+  const transitionId = await beginPrivateSessionTransition();
+  interruptSessionTransition(transitionId);
+  assert.equal(isSessionTransitioning(), true);
+
+  let serverWasChecked = false;
+  const identity = await recoverInterruptedSessionTransitions(async () => {
+    serverWasChecked = true;
+    assert.equal(isSessionTransitioning(), true);
+    return { id: 2, username: "account-b" };
+  });
+
+  assert.equal(serverWasChecked, true);
+  assert.deepEqual(identity, { id: 2, username: "account-b" });
+  assert.equal(isSessionTransitioning(), false);
+});
+
+test("SEC-05: failed interrupted-session revalidation keeps the private-data gate closed", async () => {
+  const transitionId = await beginPrivateSessionTransition();
+  interruptSessionTransition(transitionId);
+
+  await assert.rejects(() => recoverInterruptedSessionTransitions(async () => { throw new Error("offline"); }));
+  assert.equal(isSessionTransitioning(), true);
+  await finishPrivateSessionTransition(transitionId);
+});
+
+test("SEC-05: a newer session change during recovery prevents returning the older identity", async () => {
+  const interruptedId = await beginPrivateSessionTransition();
+  interruptSessionTransition(interruptedId);
+  let resolveRecovery!: (value: { id: number; username: string }) => void;
+  const recovery = recoverInterruptedSessionTransitions(() => new Promise((resolve) => { resolveRecovery = resolve; }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const newerTransitionId = await beginPrivateSessionTransition();
+  resolveRecovery({ id: 1, username: "account-a" });
+  assert.equal(await recovery, null);
+  assert.equal(isSessionTransitioning(), true);
+
+  await finishPrivateSessionTransition(newerTransitionId);
+  const identity = await recoverInterruptedSessionTransitions(async () => ({ id: 2, username: "account-b" }));
+  assert.deepEqual(identity, { id: 2, username: "account-b" });
+  assert.equal(isSessionTransitioning(), false);
+});
+
+test("SEC-05: interrupted recovery waits for active transitions and rejects a probe when transition phases change", async () => {
+  const interruptedId = await beginPrivateSessionTransition();
+  interruptSessionTransition(interruptedId);
+  const activeId = await beginPrivateSessionTransition();
+
+  let probeCalls = 0;
+  assert.equal(await recoverInterruptedSessionTransitions(async () => {
+    probeCalls++;
+    return { id: 1, username: "account-a" };
+  }), null);
+  assert.equal(probeCalls, 0);
+
+  await finishPrivateSessionTransition(activeId);
+  let resolveRecovery!: (value: { id: number; username: string }) => void;
+  const recovery = recoverInterruptedSessionTransitions(() => new Promise((resolve) => { resolveRecovery = resolve; }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const concurrentId = await beginPrivateSessionTransition();
+  resolveRecovery({ id: 1, username: "account-a" });
+  assert.equal(await recovery, null);
+  assert.equal(isSessionTransitioning(), true);
+
+  await finishPrivateSessionTransition(concurrentId);
+  const identity = await recoverInterruptedSessionTransitions(async () => ({ id: 2, username: "account-b" }));
+  assert.deepEqual(identity, { id: 2, username: "account-b" });
+  assert.equal(isSessionTransitioning(), false);
+});
+
+test("SEC-05: a mutation callback from the previous session cannot repopulate the private query cache", async () => {
+  let finishMutation!: (value: string) => void;
+  let markMutationStarted!: () => void;
+  const mutationStarted = new Promise<void>((resolve) => { markMutationStarted = resolve; });
+  let callbackRan = false;
+  const mutation = queryClient.getMutationCache().build(queryClient, withPrivateMutationCallbacks({
+    mutationFn: () => new Promise<string>((resolve) => { finishMutation = resolve; }),
+    onMutate: () => { markMutationStarted(); },
+    onSuccess: () => {
+      callbackRan = true;
+      queryClient.setQueryData(["/api/tests"], [{ id: "old-account" }]);
+    },
+  }, capturePrivateSessionEpoch, isPrivateSessionEpochCurrent));
+  const pendingMutation = mutation.execute();
+  await mutationStarted;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const transitionId = await beginPrivateSessionTransition();
+  finishMutation("old account result");
+  await pendingMutation;
+
+  assert.equal(callbackRan, false);
+  assert.equal(queryClient.getQueryData(["/api/tests"]), undefined);
+  await finishPrivateSessionTransition(transitionId);
+});
+
 test("SEC-05: an older attempt autosave cannot finish after and overwrite the explicit save", async () => {
   const order: string[] = [];
   let finishFirst!: () => void;
@@ -191,4 +289,19 @@ test("SEC-05: an older attempt autosave cannot finish after and overwrite the ex
   finishFirst();
   await Promise.all([first, second]);
   assert.deepEqual(order, ["autosave started", "autosave finished", "explicit save finished"]);
+});
+
+test("SEC-05: queued attempt writes from the old session do not start after a session change", async () => {
+  let finishFirst!: () => void;
+  let staleWriteStarted = false;
+  const first = enqueueAttemptUpdate(502, async () => new Promise<void>((resolve) => { finishFirst = resolve; }));
+  const queued = enqueueAttemptUpdate(502, async () => { staleWriteStarted = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const transitionId = await beginPrivateSessionTransition();
+  finishFirst();
+  await first;
+  await assert.rejects(queued, /sesión cambió/i);
+  assert.equal(staleWriteStarted, false);
+  await finishPrivateSessionTransition(transitionId);
 });

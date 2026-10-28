@@ -3,8 +3,9 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = path.resolve("dist/public");
-const testPage = path.resolve("tests/browser/sec-05.html");
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "../../dist/public");
+const testPage = path.resolve(here, "sec-05.html");
 let offline = false;
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",

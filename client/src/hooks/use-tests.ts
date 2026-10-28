@@ -1,8 +1,9 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl, type errorSchemas } from "@shared/routes";
 import { z } from "zod";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/queryClient";
+import { usePrivateMutation } from "@/hooks/use-private-mutation";
 
 // Fetch list of local tests
 export function useTests() {
@@ -35,7 +36,7 @@ export function useImportTest() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async ({ filename, content }: { filename: string; content: any[] }) => {
       const res = await apiFetch(api.tests.import.path, {
         method: "POST",
@@ -72,7 +73,7 @@ export function useCreateQuestion() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async (question: { testId: string; questionText: string; answers: Record<string, string>; correctAnswer: string; category?: string }) => {
       const res = await apiFetch(api.questions.create.path, {
         method: "POST",
@@ -96,7 +97,7 @@ export function useUpdateQuestion() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async ({ id, ...updates }: { id: number } & Record<string, any>) => {
       const url = buildUrl(api.questions.update.path, { id });
       const res = await apiFetch(url, {
@@ -120,7 +121,7 @@ export function useDeleteQuestion() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async (id: number) => {
       const url = buildUrl(api.questions.delete.path, { id });
       const res = await apiFetch(url, { method: "DELETE" });
@@ -139,7 +140,7 @@ export function useDeleteTest() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async (testId: string) => {
       const url = buildUrl(api.tests.delete.path, { id: testId });
       const res = await apiFetch(url, { method: "DELETE" });
@@ -161,7 +162,7 @@ export function useRenameTest() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  return useMutation({
+  return usePrivateMutation({
     mutationFn: async ({ testId, newName }: { testId: string; newName: string }) => {
       const url = buildUrl(api.tests.rename.path, { id: testId });
       const res = await apiFetch(url, {

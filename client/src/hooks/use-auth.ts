@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest, getQueryFn, clearPrivateQueryData, beginPrivateSessionTransition, finishPrivateSessionTransition, setSessionTransition, isSessionTransitioning } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
+import { queryClient, apiRequest, getQueryFn, clearPrivateQueryData, beginPrivateSessionTransition, finishPrivateSessionTransition, recoverInterruptedSessionTransitions, setSessionTransition, isSessionTransitioning } from "@/lib/queryClient";
 import { useLocation } from "wouter";
+import { usePrivateMutation } from "@/hooks/use-private-mutation";
 
 interface User {
   id: number;
@@ -35,10 +36,11 @@ export function useAuth() {
   const { data: user, isLoading } = useQuery<User | null>({
     queryKey: ["/api/auth/me", sessionVersion],
     queryFn: async (context) => isSessionTransitioning()
-      ? null
+      ? recoverInterruptedSessionTransitions(async () => await getQueryFn<User>({ on401: "returnNull" })({ ...context, queryKey: ["/api/auth/me"] }))
       : getQueryFn<User>({ on401: "returnNull" })({ ...context, queryKey: ["/api/auth/me"] }),
     retry: false,
     staleTime: Infinity,
+    refetchInterval: () => isSessionTransitioning() ? 5_000 : false,
   });
 
   const wasAuthenticated = useRef(false);
@@ -55,7 +57,8 @@ export function useAuth() {
     }
   }, [user]);
 
-  const loginMutation = useMutation({
+  const loginMutation = usePrivateMutation({
+    meta: { sessionTransition: true },
     onMutate: () => beginPrivateSessionTransition(),
     mutationFn: async (data: LoginData) => {
       const res = await apiRequest("POST", "/api/auth/login", data);
@@ -71,7 +74,8 @@ export function useAuth() {
     },
   });
 
-  const registerMutation = useMutation({
+  const registerMutation = usePrivateMutation({
+    meta: { sessionTransition: true },
     onMutate: () => beginPrivateSessionTransition(),
     mutationFn: async (data: RegisterData) => {
       const res = await apiRequest("POST", "/api/auth/register", data);
@@ -87,7 +91,8 @@ export function useAuth() {
     },
   });
 
-  const logoutMutation = useMutation({
+  const logoutMutation = usePrivateMutation({
+    meta: { sessionTransition: true },
     onMutate: () => beginPrivateSessionTransition(),
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/auth/logout", {});
