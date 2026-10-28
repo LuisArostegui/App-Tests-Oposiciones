@@ -82,6 +82,50 @@ test("an attempt with a missing question shows a conflict and never continues wi
   expect(state.attemptState.status).toBe("in_progress");
 });
 
+test("an old attempt URL after test rename redirects and resumes the same attempt", async ({ page, request }) => {
+  await login(page, request);
+  await startAttempt(page);
+  await page.getByRole("button", { name: "Correcta" }).first().click();
+  await expect.poll(async () => (await (await request.get("/__e2e/attempt-state")).json()).attemptState.answers["11"]).toBe("A");
+  const oldAttemptUrl = page.url();
+  const renamedTestId = "renamed #1 % Ánimo.json";
+  await request.post("/__e2e/rename-attempt-test", { data: { testId: renamedTestId } });
+
+  await page.goto(oldAttemptUrl);
+
+  await expect(page).toHaveURL(new RegExp(`/test/${encodeURIComponent(renamedTestId)}\\?attempt=808$`));
+  await expect(page.getByText("Pregunta de prueba uno")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Correcta" }).first()).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("attempt-question-conflict")).toHaveCount(0);
+  const state = await (await request.get("/__e2e/attempt-state")).json();
+  expect(state.attemptState.id).toBe(808);
+  expect(state.attemptState.testId).toBe(renamedTestId);
+  expect(state.attemptState.answers["11"]).toBe("A");
+});
+
+test("retrying question lookup keeps the conflict until every attempt question is available", async ({ page, request }) => {
+  await login(page, request);
+  await startAttempt(page);
+  const attemptUrl = page.url();
+  await request.post("/__e2e/omit-attempt-question");
+
+  await page.goto(attemptUrl);
+  await expect(page.getByTestId("attempt-question-conflict")).toBeVisible();
+  await page.getByTestId("button-retry-questions").click();
+  await expect(page.getByTestId("attempt-question-conflict")).toBeVisible();
+  await expect(page.getByTestId("button-start-test")).toHaveCount(0);
+  await expect(page).toHaveURL(attemptUrl);
+
+  await request.post("/__e2e/restore-attempt-question");
+  await page.getByTestId("button-retry-questions").click();
+  await expect(page.getByText("Pregunta de prueba uno")).toBeVisible();
+  await expect(page.getByTestId("attempt-question-conflict")).toHaveCount(0);
+  await expect(page).toHaveURL(attemptUrl);
+  const state = await (await request.get("/__e2e/attempt-state")).json();
+  expect(state.attemptState.id).toBe(808);
+  expect(state.attemptState.status).toBe("in_progress");
+});
+
 test("special test names navigate through one encoded path and the manager preselects the chosen test", async ({ page, request }) => {
   const testId = "Tema #1 % aprobado Ánimo.json";
   await request.post("/__e2e/test-name", { data: { testId } });

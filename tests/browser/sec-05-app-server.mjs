@@ -112,6 +112,16 @@ createServer(async (request, response) => {
     missingAttemptQuestion = true;
     return response.writeHead(204).end();
   }
+  if (url.pathname === "/__e2e/restore-attempt-question" && request.method === "POST") {
+    missingAttemptQuestion = false;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/rename-attempt-test" && request.method === "POST") {
+    const { testId } = await readJson(request);
+    users["account-a"].tests[0] = { ...users["account-a"].tests[0], id: testId };
+    if (attemptState) attemptState = { ...attemptState, testId };
+    return response.writeHead(204).end();
+  }
   if (url.pathname === "/__e2e/fail-next-attempt-read" && request.method === "POST") {
     failNextAttemptRead = true;
     return response.writeHead(204).end();

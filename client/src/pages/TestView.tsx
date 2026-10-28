@@ -361,6 +361,32 @@ export default function TestView() {
     }
   };
 
+  const handleRetryAttemptQuestions = async () => {
+    const refreshed = await refetchTest();
+    if (refreshed.isError || !refreshed.data || !existingAttempt || existingAttempt.status !== "in_progress") {
+      setAttemptQuestionConflict(true);
+      return;
+    }
+
+    const order = existingAttempt.questionOrder as number[];
+    const orderedQuestions = order
+      .map((questionId) => refreshed.data.find((question) => question.id === questionId))
+      .filter((question): question is Question => question !== undefined);
+
+    if (order.length === 0 || orderedQuestions.length !== order.length || new Set(order).size !== order.length) {
+      setAttemptQuestionConflict(true);
+      return;
+    }
+
+    resumeHandled.current = true;
+    setActiveQuestions(orderedQuestions);
+    setCurrentIndex(Math.min(existingAttempt.currentIndex, orderedQuestions.length - 1));
+    setAnswers(existingAttempt.answers as Record<number, string> || {});
+    setAttemptId(existingAttempt.id);
+    setIsStarted(true);
+    setAttemptQuestionConflict(false);
+  };
+
   const returnTo = `${location}${searchString ? `?${searchString.replace(/^\?/, "")}` : ""}`;
 
   if (attemptIdParam && attemptLoading) {
@@ -404,9 +430,7 @@ export default function TestView() {
           </p>
           <div className="flex justify-center gap-3">
             <Button variant="outline" onClick={() => {
-              resumeHandled.current = false;
-              setAttemptQuestionConflict(false);
-              void refetchTest();
+              void handleRetryAttemptQuestions();
             }} data-testid="button-retry-questions">Volver a comprobar</Button>
             <Button asChild><Link href="/results">Ver historial</Link></Button>
           </div>

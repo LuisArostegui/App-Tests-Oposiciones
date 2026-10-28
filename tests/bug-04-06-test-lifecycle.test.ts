@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import express from "express";
 import session from "express-session";
 import { createServer, type Server } from "node:http";
@@ -105,6 +105,23 @@ async function finalize(userId: number, attemptId: number, questionId: number): 
     body: JSON.stringify({ answers: { [questionId]: "A" } }),
   }, userId);
   assert.equal(response.status, 200);
+}
+
+async function waitForOwnerLockWaiters(minimum: number, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const waiting = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM pg_stat_activity
+       WHERE datname = current_database()
+         AND pid <> pg_backend_pid()
+         AND wait_event_type = 'Lock'
+         AND query ILIKE '%users%'`,
+    );
+    if (Number(waiting.rows[0]?.count) >= minimum) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(`Expected ${minimum} PostgreSQL owner-lock waiter(s)`);
 }
 
 test("BUG-04/06: rename moves open attempts and linked result history atomically and keeps the attempt resumable", async () => {
@@ -215,12 +232,31 @@ test("BUG-04/06: deleting a completed test preserves attempts, linked results, a
 test("BUG-04/06: concurrent delete and attempt creation cannot leave an open attempt without questions", async () => {
   const testId = uniqueTestId("delete-race");
   const questionIds = await addTest(ownerId, testId, 1);
-  const [deleteResponse, attemptResponse] = await Promise.all([
-    request(`/api/tests/${encodeURIComponent(testId)}`, { method: "DELETE" }, ownerId),
-    request("/api/attempts", {
-      method: "POST", body: JSON.stringify({ testId, questionOrder: questionIds }),
-    }, ownerId),
-  ]);
+  let signalOwnerLocked!: () => void;
+  let releaseOwner!: () => void;
+  const ownerLocked = new Promise<void>((resolve) => { signalOwnerLocked = resolve; });
+  const releaseBlocker = new Promise<void>((resolve) => { releaseOwner = resolve; });
+  const blocker = (async () => db.transaction(async (tx) => {
+    await tx.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, ownerId)).for("update");
+    signalOwnerLocked();
+    await releaseBlocker;
+  }))();
+  const deleteRequest = request(`/api/tests/${encodeURIComponent(testId)}`, { method: "DELETE" }, ownerId);
+  const attemptRequest = request("/api/attempts", {
+    method: "POST", body: JSON.stringify({ testId, questionOrder: questionIds }),
+  }, ownerId);
+
+  let deleteResponse: Response;
+  let attemptResponse: Response;
+  try {
+    await ownerLocked;
+    await waitForOwnerLockWaiters(2);
+    releaseOwner();
+    [deleteResponse, attemptResponse] = await Promise.all([deleteRequest, attemptRequest]);
+  } finally {
+    releaseOwner();
+    await blocker;
+  }
 
   const questions = await storage.getQuestionsByTestId(testId, ownerId);
   const attempts = await storage.getAttempts(ownerId);
@@ -241,6 +277,15 @@ test("BUG-04: concurrent rename and import keep each imported question wholly in
   const oldId = uniqueTestId("import-race-old");
   const newId = uniqueTestId("import-race-new");
   const existingQuestionIds = await addTest(ownerId, oldId, 2);
+  let signalOwnerLocked!: () => void;
+  let releaseOwner!: () => void;
+  const ownerLocked = new Promise<void>((resolve) => { signalOwnerLocked = resolve; });
+  const releaseBlocker = new Promise<void>((resolve) => { releaseOwner = resolve; });
+  const blocker = (async () => db.transaction(async (tx) => {
+    await tx.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, ownerId)).for("update");
+    signalOwnerLocked();
+    await releaseBlocker;
+  }))();
   const importRequest = request("/api/tests/import", {
     method: "POST",
     body: JSON.stringify({ filename: oldId, content: [
@@ -251,7 +296,17 @@ test("BUG-04: concurrent rename and import keep each imported question wholly in
   const renameRequest = request(`/api/tests/${encodeURIComponent(oldId)}/rename`, {
     method: "PUT", body: JSON.stringify({ newName: newId }),
   }, ownerId);
-  const [importResponse, renameResponse] = await Promise.all([importRequest, renameRequest]);
+  let importResponse: Response;
+  let renameResponse: Response;
+  try {
+    await ownerLocked;
+    await waitForOwnerLockWaiters(2);
+    releaseOwner();
+    [importResponse, renameResponse] = await Promise.all([importRequest, renameRequest]);
+  } finally {
+    releaseOwner();
+    await blocker;
+  }
   assert.equal(importResponse.status, 201);
   assert.equal(renameResponse.status, 200);
 
