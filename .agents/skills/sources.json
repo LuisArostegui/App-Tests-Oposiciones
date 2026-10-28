@@ -1,0 +1,54 @@
+{
+  "installed_on": "2026-10-28",
+  "note": "Upstream files are vendored with any local adaptations listed per skill. Preserve bundled licenses and attribution. Project compatibility guidance lives in root AGENTS.md.",
+  "skills": [
+    {
+      "name": "vercel-react-best-practices",
+      "adaptations": [
+        "Fixed three relative rule links in AGENTS.md to point into ./rules/: async-defer-await.md, async-cheap-condition-before-await.md and server-hoist-static-io.md."
+      ],
+      "repository": "vercel-labs/agent-skills",
+      "path": "skills/react-best-practices",
+      "commit": "1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62",
+      "source": "https://github.com/vercel-labs/agent-skills/tree/1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62/skills/react-best-practices"
+    },
+    {
+      "name": "web-design-guidelines",
+      "repository": "vercel-labs/agent-skills",
+      "path": "skills/web-design-guidelines",
+      "commit": "1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62",
+      "source": "https://github.com/vercel-labs/agent-skills/tree/1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62/skills/web-design-guidelines"
+    },
+    {
+      "name": "security-best-practices",
+      "repository": "openai/skills",
+      "path": "skills/.curated/security-best-practices",
+      "commit": "49f948faa9258a0c61caceaf225e179651397431",
+      "source": "https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/security-best-practices"
+    },
+    {
+      "name": "playwright",
+      "repository": "openai/skills",
+      "path": "skills/.curated/playwright",
+      "commit": "49f948faa9258a0c61caceaf225e179651397431",
+      "source": "https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/playwright"
+    },
+    {
+      "name": "shadcn",
+      "adaptations": [
+        "Removed the user-invocable frontmatter field, which is not accepted by the installed Codex skill validator. Instructions and remaining metadata are unchanged."
+      ],
+      "repository": "shadcn-ui/ui",
+      "path": "skills/shadcn",
+      "commit": "96da9cc7f1aa10580a3741664e2a77c721206c00",
+      "source": "https://github.com/shadcn-ui/ui/tree/96da9cc7f1aa10580a3741664e2a77c721206c00/skills/shadcn"
+    },
+    {
+      "name": "tanstack-query-best-practices",
+      "repository": "deckardger/tanstack-agent-skills",
+      "path": "skills/tanstack-query",
+      "commit": "b2fc14c974b2ca09b38de09c28237f240175205b",
+      "source": "https://github.com/deckardger/tanstack-agent-skills/tree/b2fc14c974b2ca09b38de09c28237f240175205b/skills/tanstack-query"
+    }
+  ]
+}
