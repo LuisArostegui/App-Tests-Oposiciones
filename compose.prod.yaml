@@ -1,0 +1,59 @@
+name: opostest-prod
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Configura POSTGRES_USER en .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configura POSTGRES_PASSWORD en .env.production}
+      POSTGRES_DB: ${POSTGRES_DB:?Configura POSTGRES_DB en .env.production}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  app:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      DATABASE_URL: ${DATABASE_URL:?Configura DATABASE_URL en .env.production}
+      SESSION_SECRET: ${SESSION_SECRET:?Configura SESSION_SECRET en .env.production}
+      APP_URL: ${APP_URL:?Configura APP_URL en .env.production}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:?Configura TRUST_PROXY_HOPS en .env.production}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
+      REQUEST_LOGGING_ENABLED: ${REQUEST_LOGGING_ENABLED:-true}
+    ports:
+      - "127.0.0.1:${APP_PORT:?Configura APP_PORT en .env.production}:5000"
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:5000/healthz', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  postgres_prod_data:
+
+networks:
+  backend:

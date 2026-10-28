@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const externalBaseUrl = process.env.REL01_EXTERNAL_BASE_URL?.replace(/\/$/, "");
 
 export default defineConfig({
   testDir: ".",
@@ -14,11 +15,12 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: "line",
   use: {
-    baseURL: "http://127.0.0.1:4186",
+    baseURL: externalBaseUrl || "http://127.0.0.1:4186",
+    ignoreHTTPSErrors: Boolean(externalBaseUrl),
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: {
+  ...(externalBaseUrl ? {} : { webServer: {
     command: "node script/run-server.mjs development",
     cwd: projectRoot,
     url: "http://127.0.0.1:4186/login",
@@ -33,5 +35,5 @@ export default defineConfig({
       REQUEST_LOGGING_ENABLED: process.env.REQUEST_LOGGING_ENABLED,
       REGISTRATION_ENABLED: process.env.REGISTRATION_ENABLED,
     },
-  },
+  } }),
 });

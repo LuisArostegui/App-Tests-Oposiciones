@@ -1,0 +1,17 @@
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${INFRA_TEST_DB_PORT:?Configura INFRA_TEST_DB_PORT para el proyecto de pruebas}:5432"
+
+  infra-https-proxy:
+    image: caddy:2.10.2-alpine
+    profiles: ["infra-test"]
+    ports:
+      - "127.0.0.1:${INFRA_TEST_HTTPS_PORT:?Configura INFRA_TEST_HTTPS_PORT para el proyecto de pruebas}:443"
+    volumes:
+      - ./tests/infra-01/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - backend

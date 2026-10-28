@@ -9,6 +9,7 @@ import { getSessionSecret, getTrustedProxyHops, isRegistrationEnabled, isRequest
 import { apiErrorHandler, createRequestLogger } from "./http-middleware";
 import { createAuthRateLimiter, createSameOriginGuard } from "./security-middleware";
 import { importJsonBodyParser } from "./body-parsers";
+import { createHealthHandler } from "./health";
 import { api } from "@shared/routes";
 
 declare module "http" {
@@ -29,6 +30,7 @@ export async function createApplication(environment: NodeJS.ProcessEnv = process
   app.locals.secureSessionCookie = environment.NODE_ENV === "production";
   const httpServer = createServer(app);
 
+  app.get("/healthz", createHealthHandler(() => pool.query("SELECT 1")));
   app.use(createRequestLogger(requestLoggingEnabled));
   app.use("/api", (_req, res, next) => {
     res.setHeader("Cache-Control", "no-store");

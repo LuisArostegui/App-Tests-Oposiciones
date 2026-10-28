@@ -1,35 +1,40 @@
-# Migraciones de esquema
+# Migraciones versionadas
 
-## `20261028_attempt_result_link.sql`
+`npm run db:migrate` es el único comando de aplicación de esquema para producción. La aplicación no migra al arrancar. El runner toma un bloqueo asesor de PostgreSQL, aplica cada archivo en una transacción, registra su nombre y SHA-256 en `opostest_schema_migrations` y rechaza cambios posteriores en un archivo ya aplicado.
 
-La migración añade `results.attempt_id`, nullable, con FK a `test_attempts` y unicidad para los valores presentes. Los resultados históricos quedan en `NULL`; no se asocia ningún resultado antiguo por conjetura. Al borrar un intento, su resultado se conserva y el enlace pasa a `NULL`. El propio archivo delimita los tres cambios con `BEGIN`/`COMMIT`: ante cualquier error, PostgreSQL revierte íntegramente la migración.
+## Base nueva
 
-Antes de aplicar cambios en una instalación, crea una copia PostgreSQL, por ejemplo:
+La cadena se ejecuta en orden de nombre:
 
-```sh
-pg_dump --format=custom --file=opostest-before-attempt-result-link.dump "$DATABASE_URL"
-```
-
-Revisa que `results` y `test_attempts` existen y aplica la migración una sola vez:
+1. `20261028_000_baseline.sql` crea el esquema previo a la relación entre resultado e intento.
+2. `20261028_attempt_result_link.sql` añade `results.attempt_id`, nullable, con FK `ON DELETE SET NULL` y unicidad. Los resultados históricos siguen sin enlace; no se inventan asociaciones.
 
 ```sh
-psql "$DATABASE_URL" --set ON_ERROR_STOP=1 --file=migrations/20261028_attempt_result_link.sql
+npm ci
+DATABASE_URL="$DATABASE_URL" npm run db:migrate
 ```
 
-El archivo abre y cierra una transacción, por lo que un error en cualquier sentencia revierte los cambios anteriores. No ejecutes el SQL por fragmentos ni continúes tras un error.
+Repetir el comando no reejecuta migraciones registradas. No uses `db:push` en producción.
 
-Para revertirla, detén primero las escrituras de la aplicación y guarda otra copia. La reversión conserva intentos y resultados, pero elimina las asociaciones creadas desde esta migración:
+## Adoptar una instalación existente
 
-```sql
-ALTER TABLE results DROP CONSTRAINT IF EXISTS results_attempt_id_unique;
-ALTER TABLE results DROP CONSTRAINT IF EXISTS results_attempt_id_fkey;
-ALTER TABLE results DROP COLUMN IF EXISTS attempt_id;
-```
-
-Ejecuta también la reversión como una única transacción (por ejemplo, guardando esas sentencias en un archivo y aplicándolo con `psql "$DATABASE_URL" --set ON_ERROR_STOP=1 --single-transaction --file=<archivo-de-reversion.sql>`). Si falla, no continúes con sentencias sueltas: revisa el error y restaura la copia previa si procede.
-
-Si una copia previa es necesaria, restaúrala en una base de destino independiente y valida la aplicación antes de cambiar el servicio:
+Las instalaciones creadas con `db:push` no tienen historial. Antes de adoptarlas, detén las escrituras, crea una copia independiente y ensaya allí el mismo procedimiento. Nunca ejecutes el baseline directamente sobre la base personal o de producción para “probar”.
 
 ```sh
-pg_restore --dbname="$RESTORE_DATABASE_URL" --clean --if-exists opostest-before-attempt-result-link.dump
+DATABASE_URL="$DATABASE_URL_DE_LA_COPIA" npm run db:baseline
+DATABASE_URL="$DATABASE_URL_DE_LA_COPIA" npm run db:migrate
+```
+
+`db:baseline` comprueba las tablas y columnas requeridas antes de registrar la baseline. Si `results.attempt_id` ya existe, también valida que tenga unicidad y una FK `ON DELETE SET NULL`, y registra esa migración como aplicada. Si la columna aún no existe, registra solo la baseline; `db:migrate` aplica después el enlace sin alterar los resultados previos. Una base vacía, parcial o incompatible no se adopta.
+
+El comando no sustituye la comprobación de la copia: valida estructura y relaciones requeridas, pero no certifica que el contenido o todas las restricciones ajenas al proyecto coincidan con el esquema esperado. Tras ensayar, confirma el estado en la copia antes de programar cualquier actualización.
+
+## Validación aislada
+
+`npm run test:infra-migrations` exige `INFRA_TEST_DATABASE_URL` con nombre terminado en `_infra_test`. Crea dos bases temporales, prueba inicialización, ejecuciones concurrentes y repetidas, adopción de un esquema previo con resultado legacy y limpia solo esas bases creadas por la suite.
+
+```sh
+$env:INFRA_TEST_DATABASE_URL = "postgresql://.../opostest_infra_test"
+npm run test:infra-migrations
+Remove-Item Env:INFRA_TEST_DATABASE_URL
 ```

@@ -7,7 +7,7 @@ const usernames = [];
 
 test.afterAll(async () => {
   try {
-    if (usernames.length > 0) {
+    if (process.env.REL01_KEEP_DATA !== "true" && usernames.length > 0) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -276,8 +276,9 @@ test("BUG-05 ordena de forma estable y presenta los 10 resultados más recientes
     expect(apiResults.map(({ id }) => id)).toEqual(expectedHistory.map(({ id }) => id));
 
     await page.goto("/results");
-    const visibleRows = await page.locator("tbody tr").allTextContents();
-    expect(visibleRows).toHaveLength(12);
+    const resultRows = page.locator("tbody tr");
+    await expect(resultRows).toHaveCount(12);
+    const visibleRows = await resultRows.allTextContents();
     expect(visibleRows[0]).toContain("history-10");
     expect(visibleRows[1]).toContain("history-11");
     expect(visibleRows.at(-1)).toContain("history-0");
