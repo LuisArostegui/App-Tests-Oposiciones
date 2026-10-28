@@ -4,8 +4,8 @@
 
 ![OposTest Pro](https://img.shields.io/badge/OposTest-Pro-0ea5e9?style=for-the-badge&logo=bookstack&logoColor=white)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue?style=for-the-badge)
-![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
-![Node](https://img.shields.io/badge/node-20+-339933?style=for-the-badge&logo=node.js&logoColor=white)
+![License](https://img.shields.io/badge/license-not%20declared-lightgrey?style=for-the-badge)
+![Node](https://img.shields.io/badge/node-22.23.2-339933?style=for-the-badge&logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)
 
@@ -103,9 +103,9 @@ OposTest Pro es una aplicación web progresiva (PWA) diseñada específicamente 
 
 ### Requisitos
 
-- Node.js 20 o superior
+- Node.js 22.12 o superior dentro de la rama 22 (versión local/CI: `22.23.2`, ver `.nvmrc`)
 - PostgreSQL 14 o superior
-- npm o yarn
+- npm 10 (`package.json` limita la compatibilidad a npm 10)
 
 ### Pasos
 
@@ -114,14 +114,14 @@ OposTest Pro es una aplicación web progresiva (PWA) diseñada específicamente 
 git clone https://github.com/tu-usuario/opostest-pro.git
 cd opostest-pro
 
-# 2. Instalar dependencias
-npm install
+# 2. Instalar exactamente el árbol de package-lock.json
+npm ci
 
 # 3. Configurar variables de entorno
 cp .env.example .env
 # Edita .env con tu configuración
 
-# 4. Crear las tablas en la base de datos
+# 4. Preparar el esquema de una base local nueva para desarrollo
 npm run db:push
 
 # 5. Iniciar en modo desarrollo
@@ -129,6 +129,33 @@ npm run dev
 ```
 
 La aplicación estará disponible en `http://localhost:5000`
+
+### PostgreSQL local
+
+Instala PostgreSQL 14 o superior y crea una base y usuario dedicados. En `psql` como administrador:
+
+```sql
+CREATE ROLE opostest LOGIN PASSWORD 'elige-una-clave-local';
+CREATE DATABASE opostest OWNER opostest;
+```
+
+Configura `DATABASE_URL` en `.env`. El servidor y Drizzle leen ese archivo; la configuración de esquema importa `dotenv/config`. No uses las credenciales de ejemplo fuera de una base local.
+
+### Desarrollo, producción y comprobaciones
+
+`npm run dev` inicia `server/index.ts` con `NODE_ENV=development`. `npm run build` genera `dist/`; `npm start` inicia ese build con `NODE_ENV=production` y exige un `SESSION_SECRET` único y fuerte. Ambos comandos funcionan en Windows y Linux mediante `script/run-server.mjs`.
+
+Para preparar el esquema de desarrollo en una base local nueva, usa `npm run db:push`. El repositorio también conserva SQL versionado en `migrations/`; `db:push` no es el mecanismo de actualización de una base de producción. La migración `migrations/20261028_attempt_result_link.sql` contiene sus propias instrucciones de copia de seguridad y aplicación.
+
+```bash
+npm run check
+npm test
+npm run build
+npm exec playwright install chromium  # primera ejecución de test:browser
+npm run test:browser
+```
+
+`npm test` crea un PostgreSQL temporal con Docker o acepta un `TEST_DATABASE_URL` exclusivo. Rechaza la URL configurada para desarrollo. Las pruebas de navegador usan el build de producción y servidores de fixture; no validan la base ni la API desplegada.
 
 ---
 
@@ -168,10 +195,17 @@ REGISTRATION_ENABLED=
 | `TRUST_PROXY_HOPS` | Número de saltos de proxy inverso confiables; `0` ignora cabeceras de proxy | `0` |
 | `REQUEST_LOGGING_ENABLED` | Activa logs de método, ruta, estado y duración. No se guardan cuerpos ni query strings | `true` |
 | `REGISTRATION_ENABLED` | Permite crear cuentas desde la pantalla de registro | Desarrollo: `true`; producción: `false` |
+| `APP_URL` | Origen público exacto, sin barra final; restringe origen de las solicitudes mutables/CSRF detrás de proxy | Sin configurar para acceso same-origin |
 
 En producción el servidor rechaza una clave de sesión ausente, de ejemplo o débil, incluido el secreto fijo de desarrollo. La cookie de sesión es `HttpOnly`, `Secure` bajo HTTPS, `SameSite=Lax` y caduca tras 30 días. Para Nginx, configura `TRUST_PROXY_HOPS=1` solo si todo el tráfico pasa por ese proxy controlado; el valor predeterminado es `0`. Puedes configurar `REQUEST_LOGGING_ENABLED=false` en una instancia privada. El registro de cuentas está deshabilitado por defecto en producción; establece `REGISTRATION_ENABLED=true` y reinicia el servidor solo cuando quieras permitir nuevas altas.
 
 Las solicitudes API que modifican datos y las operaciones de login/registro deben proceder del mismo origen. El cliente servido por la aplicación usa rutas relativas y envía solicitudes same-origin, por lo que no necesita un token CSRF adicional.
+
+### Avisos pendientes de dependencias
+
+La auditoría del `main` integrado de #15 registró 51 avisos. Tras las correcciones compatibles de esta rama y la retirada de una dependencia sin uso, el resultado es 3 altos y ningún crítico, moderado o bajo (npm audit, 28-10-2026). `drizzle-orm` 0.39.3 sigue afectado por la inyección SQL de identificadores de GHSA-gpj5-g38j-94v9; la versión corregida indicada es 0.45.2 o posterior. Drizzle ORM se importa en el servidor y se incluye en su bundle. La auditoría no prueba por sí sola que una ruta concreta permita controlar identificadores; queda revisar el uso y actualizar Drizzle con pruebas de compatibilidad.
+
+`zod` 3.25.76 sigue afectado por agotamiento de memoria al validar colecciones restringidas (GHSA-mrhx-c7xc-m3w5), corregido en Zod 4.6.6 o posterior. Zod valida contratos de API y el archivo de importación local; el límite de cuerpo reduce el tamaño recibido, pero no se registra como solución al aviso. `drizzle-zod` se usa para crear los esquemas compartidos y queda afectado a través de Drizzle ORM y Zod. Se retiró `zod-validation-error`, que no tenía importaciones en el código. La actualización requiere una revisión separada de compatibilidad de Zod 4 y Drizzle. Vuelve a ejecutar `npm audit` en cada actualización: estos datos describen la auditoría fechada, no un estado permanente.
 
 ---
 
@@ -326,8 +360,7 @@ opostest-pro/
 npm run dev          # Inicia servidor de desarrollo
 
 # Base de datos
-npm run db:push      # Sincroniza esquema con la BD
-npm run db:studio    # Abre Drizzle Studio (GUI)
+npm run db:push      # Sincroniza el esquema de una base local de desarrollo
 
 # Producción
 npm run build        # Compila para producción
@@ -357,7 +390,7 @@ npm start            # Inicia en modo producción
 
 ## Licencia
 
-Este proyecto está bajo la Licencia MIT. Ver el archivo [LICENSE](LICENSE) para más detalles.
+Ni el upstream [`Alexmofu/App-Tests-Oposiciones`](https://github.com/Alexmofu/App-Tests-Oposiciones) ni este fork incluyen un archivo `LICENSE` en `main` (comprobado el 28-10-2026). El campo MIT anterior de `package.json` y esta referencia del README no acreditaban una autorización y se han retirado. La licencia y los derechos para redistribuir el código deben aclararse con el titular correspondiente antes de distribuir este fork. Esta nota no concede derechos adicionales.
 
 ---
 

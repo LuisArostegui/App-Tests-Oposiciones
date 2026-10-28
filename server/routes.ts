@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
-import { api, QUESTION_IMPORT_MAX_BYTES } from "@shared/routes";
+import { api, QUESTION_IMPORT_MAX_CONTENT_BYTES } from "@shared/routes";
 import { z } from "zod";
 import { InsertQuestion, registerSchema, loginSchema } from "@shared/schema";
 import { config, isRegistrationEnabled } from "./config";
@@ -190,13 +190,11 @@ export async function registerRoutes(
 
   app.post(api.tests.import.path, requireAuth, asyncHandler(async (req, res) => {
     try {
-      if (typeof req.body === "object" && req.body !== null && "content" in req.body) {
-        const serializedContent = JSON.stringify(req.body.content);
-        if (typeof serializedContent === "string" && new TextEncoder().encode(serializedContent).byteLength > QUESTION_IMPORT_MAX_BYTES) {
-          return res.status(413).json({ message: "El archivo supera el límite de 5 MiB." });
-        }
-      }
       const input = api.tests.import.input.parse(req.body);
+      const serializedContent = JSON.stringify(input.content);
+      if (new TextEncoder().encode(serializedContent).byteLength > QUESTION_IMPORT_MAX_CONTENT_BYTES) {
+        return res.status(413).json({ message: "El archivo supera el límite de 5 MiB." });
+      }
       const questionsToInsert: InsertQuestion[] = input.content.map((question) => ({
         testId: input.filename,
         questionText: question.pregunta,

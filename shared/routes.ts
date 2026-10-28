@@ -3,6 +3,12 @@ import { insertQuestionSchema, insertAttemptSchema, updateQuestionSchema, update
 
 const answerKeySchema = z.enum(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
 export const QUESTION_IMPORT_MAX_BYTES = 5 * 1024 * 1024;
+export const QUESTION_IMPORT_MAX_QUESTIONS = 1000;
+// Each omitted category adds `,"oposicion":"General"` (22 UTF-8 bytes) after normalization.
+export const QUESTION_IMPORT_NORMALIZATION_OVERHEAD_BYTES = QUESTION_IMPORT_MAX_QUESTIONS * 22;
+export const QUESTION_IMPORT_MAX_CONTENT_BYTES = QUESTION_IMPORT_MAX_BYTES + QUESTION_IMPORT_NORMALIZATION_OVERHEAD_BYTES;
+export const QUESTION_IMPORT_HTTP_WRAPPER_MAX_BYTES = 16 * 1024;
+export const QUESTION_IMPORT_MAX_REQUEST_BYTES = QUESTION_IMPORT_MAX_CONTENT_BYTES + QUESTION_IMPORT_HTTP_WRAPPER_MAX_BYTES;
 const importAnswersSchema = z.record(answerKeySchema, z.string().trim().min(1, 'no puede estar vacía').max(2000, 'supera los 2000 caracteres')).superRefine((answers, ctx) => {
   const count = Object.keys(answers).length;
   if (count < 2 || count > 8) {
@@ -25,7 +31,7 @@ export const questionImportItemSchema = z.object({
   }
 });
 
-export const questionImportContentSchema = z.array(questionImportItemSchema).min(1, 'debe incluir al menos una pregunta').max(1000, 'no puede superar 1000 preguntas');
+export const questionImportContentSchema = z.array(questionImportItemSchema).min(1, 'debe incluir al menos una pregunta').max(QUESTION_IMPORT_MAX_QUESTIONS, 'no puede superar 1000 preguntas');
 
 export const questionImportFilenameSchema = z.string().min(1, 'es obligatorio').max(150, 'no puede superar 150 caracteres')
   .refine((filename) => !/[\x00-\x1f\x7f]/.test(filename), 'no puede contener caracteres de control')
