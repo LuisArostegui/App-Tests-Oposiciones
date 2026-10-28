@@ -14,7 +14,12 @@ const [{ registerRoutes }, { storage }, { db, pool }, { passport }, schema] = aw
   import("../server/routes"), import("../server/storage"), import("../server/db"),
   import("../server/auth"), import("../shared/schema"),
 ]);
-const [{ importJsonBodyParser }, { apiErrorHandler }, { api }] = await Promise.all([
+const [{ importJsonBodyParser }, { apiErrorHandler }, {
+  api,
+  questionImportContentSchema,
+  QUESTION_IMPORT_MAX_BYTES,
+  QUESTION_IMPORT_MAX_CONTENT_BYTES,
+}] = await Promise.all([
   import("../server/body-parsers"), import("../server/http-middleware"), import("../shared/routes"),
 ]);
 
@@ -180,8 +185,8 @@ test("BUG-01: enforces filename, field, question-count and request-size limits",
     respuesta_correcta: "A",
   }));
   let contentBytes = Buffer.byteLength(JSON.stringify(oversizedContent));
-  while (contentBytes > 5 * 1024 * 1024 + 8_000) {
-    const reductionPerQuestion = Math.ceil((contentBytes - (5 * 1024 * 1024 + 8_000)) / oversizedContent.length);
+  while (contentBytes > QUESTION_IMPORT_MAX_CONTENT_BYTES + 8_000) {
+    const reductionPerQuestion = Math.ceil((contentBytes - (QUESTION_IMPORT_MAX_CONTENT_BYTES + 8_000)) / oversizedContent.length);
     for (const question of oversizedContent) {
       question.respuestas.A = question.respuestas.A.slice(0, -reductionPerQuestion);
     }
@@ -196,9 +201,44 @@ test("BUG-01: enforces filename, field, question-count and request-size limits",
 
   const parserLimit = await request("/api/tests/import", {
     method: "POST",
-    body: JSON.stringify({ filename: `bug01-parser-limit-${suffix}.json`, content: [{ pregunta: "x".repeat(5 * 1024 * 1024 + 20_000) }] }),
+    body: JSON.stringify({ filename: `bug01-parser-limit-${suffix}.json`, content: [{ pregunta: "x".repeat(QUESTION_IMPORT_MAX_BYTES + 40_000) }] }),
   });
   assert.equal(parserLimit.status, 413);
+});
+
+test("BUG-01: accepts a valid 5 MiB source file after the default category expands its JSON", async () => {
+  let lowAnswerLength = 0;
+  let highAnswerLength = 2000;
+  let contentAtLimit: Array<{ pregunta: string; respuestas: { A: string; B: string }; respuesta_correcta: string }> = [];
+  let originalContentBytes = 0;
+  while (lowAnswerLength <= highAnswerLength) {
+    const answerLength = Math.floor((lowAnswerLength + highAnswerLength) / 2);
+    const candidate = Array.from({ length: 1000 }, () => ({
+      pregunta: "p".repeat(4000),
+      respuestas: { A: "a".repeat(answerLength), B: "b".repeat(answerLength) },
+      respuesta_correcta: "A",
+    }));
+    const candidateBytes = Buffer.byteLength(JSON.stringify(candidate));
+    if (candidateBytes <= QUESTION_IMPORT_MAX_BYTES) {
+      contentAtLimit = candidate;
+      originalContentBytes = candidateBytes;
+      lowAnswerLength = answerLength + 1;
+    } else {
+      highAnswerLength = answerLength - 1;
+    }
+  }
+  const normalizedContent = questionImportContentSchema.parse(contentAtLimit);
+  assert.ok(originalContentBytes <= QUESTION_IMPORT_MAX_BYTES);
+  assert.ok(Buffer.byteLength(JSON.stringify(normalizedContent)) > QUESTION_IMPORT_MAX_BYTES);
+  const filename = `bug01-normalized-near-limit-${suffix}.json`;
+  const expanded = await request("/api/tests/import", {
+    method: "POST",
+    body: payload(filename, normalizedContent),
+  });
+  assert.equal(expanded.status, 201);
+  const expandedQuestions = await db.select().from(schema.questions).where(eq(schema.questions.testId, filename));
+  questionIds.push(...expandedQuestions.map(question => question.id));
+  assert.equal(expandedQuestions.length, 1000);
 });
 
 test("BUG-01: duplicate names conflict atomically and the same name is private to each owner", async () => {
@@ -267,7 +307,7 @@ test("BUG-01: unauthenticated requests and owner spoofing cannot import", async 
   assert.equal(unauthenticated.status, 401);
   const unauthenticatedLargeBody = await request("/api/tests/import", {
     method: "POST",
-    body: JSON.stringify({ content: "x".repeat(5 * 1024 * 1024 + 20_000) }),
+    body: JSON.stringify({ content: "x".repeat(QUESTION_IMPORT_MAX_BYTES + 40_000) }),
   }, null);
   assert.equal(unauthenticatedLargeBody.status, 401);
   const spoofed = await request("/api/tests/import", {

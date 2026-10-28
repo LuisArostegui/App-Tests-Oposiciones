@@ -21,22 +21,22 @@ sudo apt update && sudo apt upgrade -y
 
 ---
 
-## Paso 2: Instalar Node.js 20
+## Paso 2: Instalar Node.js 22
 
-OposTest Pro requiere Node.js versión 20 o superior.
+OposTest Pro requiere Node.js `>=22.12.0 <23` y npm 10. El proyecto fija Node `22.23.2` en `.nvmrc` y CI. En Ubuntu, instala la rama 22:
 
 ```bash
 # Instalar curl si no lo tienes
 sudo apt install -y curl
 
 # Añadir el repositorio de NodeSource
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 
 # Instalar Node.js
 sudo apt install -y nodejs
 
 # Verificar la instalación
-node --version  # Debería mostrar v20.x.x
+node --version  # Debería mostrar v22.x.x
 npm --version   # Debería mostrar 10.x.x
 ```
 
@@ -149,22 +149,26 @@ Guarda el archivo: `Ctrl + X`, luego `Y`, luego `Enter`.
 ## Paso 7: Instalar Dependencias
 
 ```bash
-# Instalar todas las dependencias
-npm install
+# Instalar exactamente las dependencias de package-lock.json
+npm ci
 
 # Esto puede tardar unos minutos
 ```
 
 ---
 
-## Paso 8: Crear las Tablas de la Base de Datos
+## Paso 8: Preparar el esquema
+
+`npm run db:push` sincroniza el esquema directamente y se reserva para una base local/de desarrollo vacía. No lo uses como mecanismo de actualización de una instalación de producción. Las actualizaciones versionadas están en `migrations/`; aplica cada SQL una sola vez siguiendo su README, con copia de seguridad y revisión previa. Este repositorio todavía no tiene una cadena de migraciones que cree todo el esquema desde cero.
+
+Para la primera creación de una base de producción vacía, prepara y revisa el esquema antes de abrir el servicio:
 
 ```bash
-# Sincronizar el esquema con la base de datos
+# Sincronizar el esquema actual solo en una base nueva, sin datos que preservar
 npm run db:push
 ```
 
-> **Nota**: Esto creará las tablas necesarias incluyendo `users`, `questions`, `results`, `test_attempts` y `session` (para sesiones persistentes).
+> **Importante**: No repitas `db:push` para actualizar producción. Antes de cada actualización, revisa y aplica el SQL versionado correspondiente en `migrations/`.
 
 ---
 
@@ -378,7 +382,7 @@ sudo systemctl restart opostest
 ```bash
 cd /var/www/opostest
 git pull
-npm install
+npm ci
 npm run build
 sudo systemctl restart opostest
 ```
