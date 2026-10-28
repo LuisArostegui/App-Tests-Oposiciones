@@ -201,11 +201,9 @@ En producción el servidor rechaza una clave de sesión ausente, de ejemplo o d�
 
 Las solicitudes API que modifican datos y las operaciones de login/registro deben proceder del mismo origen. El cliente servido por la aplicación usa rutas relativas y envía solicitudes same-origin, por lo que no necesita un token CSRF adicional.
 
-### Avisos pendientes de dependencias
+### Auditoría de dependencias
 
-La auditoría del `main` integrado de #15 registró 51 avisos. Tras las correcciones compatibles de esta rama y la retirada de una dependencia sin uso, el resultado es 3 altos y ningún crítico, moderado o bajo (npm audit, 28-10-2026). `drizzle-orm` 0.39.3 sigue afectado por la inyección SQL de identificadores de GHSA-gpj5-g38j-94v9; la versión corregida indicada es 0.45.2 o posterior. Drizzle ORM se importa en el servidor y se incluye en su bundle. La auditoría no prueba por sí sola que una ruta concreta permita controlar identificadores; queda revisar el uso y actualizar Drizzle con pruebas de compatibilidad.
-
-`zod` 3.25.76 sigue afectado por agotamiento de memoria al validar colecciones restringidas (GHSA-mrhx-c7xc-m3w5), corregido en Zod 4.6.6 o posterior. Zod valida contratos de API y el archivo de importación local; el límite de cuerpo reduce el tamaño recibido, pero no se registra como solución al aviso. `drizzle-zod` se usa para crear los esquemas compartidos y queda afectado a través de Drizzle ORM y Zod. Se retiró `zod-validation-error`, que no tenía importaciones en el código. La actualización requiere una revisión separada de compatibilidad de Zod 4 y Drizzle. Vuelve a ejecutar `npm audit` en cada actualización: estos datos describen la auditoría fechada, no un estado permanente.
+La auditoría del `main` integrado de #15 registró 51 avisos. La PR #16 reduce ese resultado a 3 altos; esta actualización sobre `main` integra `drizzle-orm` 0.45.4, `drizzle-zod` 0.8.3 y `zod` 4.6.6, y `npm audit` vuelve a cero avisos (28-10-2026). El ORM queda por encima de la versión corregida de GHSA-gpj5-g38j-94v9 y Zod por encima de la versión corregida de GHSA-mrhx-c7xc-m3w5. Para conservar la importación de entre 2 y 8 respuestas en Zod 4 se usa `z.partialRecord`, porque `z.record` con claves enum ahora exige todas las claves. Reejecuta `npm audit` al cambiar el lockfile: estos recuentos corresponden a la auditoría fechada.
 
 ---
 

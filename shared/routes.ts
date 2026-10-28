@@ -9,7 +9,7 @@ export const QUESTION_IMPORT_NORMALIZATION_OVERHEAD_BYTES = QUESTION_IMPORT_MAX_
 export const QUESTION_IMPORT_MAX_CONTENT_BYTES = QUESTION_IMPORT_MAX_BYTES + QUESTION_IMPORT_NORMALIZATION_OVERHEAD_BYTES;
 export const QUESTION_IMPORT_HTTP_WRAPPER_MAX_BYTES = 16 * 1024;
 export const QUESTION_IMPORT_MAX_REQUEST_BYTES = QUESTION_IMPORT_MAX_CONTENT_BYTES + QUESTION_IMPORT_HTTP_WRAPPER_MAX_BYTES;
-const importAnswersSchema = z.record(answerKeySchema, z.string().trim().min(1, 'no puede estar vacía').max(2000, 'supera los 2000 caracteres')).superRefine((answers, ctx) => {
+const importAnswersSchema = z.partialRecord(answerKeySchema, z.string().trim().min(1, 'no puede estar vacía').max(2000, 'supera los 2000 caracteres')).superRefine((answers, ctx) => {
   const count = Object.keys(answers).length;
   if (count < 2 || count > 8) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'debe incluir entre 2 y 8 respuestas', path: [] });
