@@ -98,7 +98,7 @@ test("SEC-02: local JSON import remains available", async () => {
     method: "POST",
     body: JSON.stringify({
       filename,
-      content: [{ pregunta: "Pregunta local", respuestas: { A: "Respuesta" }, respuesta_correcta: "A" }],
+      content: [{ pregunta: "Pregunta local", respuestas: { A: "Respuesta correcta", B: "Otra respuesta" }, respuesta_correcta: "A" }],
     }),
   });
   assert.equal(response.status, 201);

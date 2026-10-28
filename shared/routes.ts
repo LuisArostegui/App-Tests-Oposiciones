@@ -1,10 +1,43 @@
 import { z } from 'zod';
 import { insertQuestionSchema, insertAttemptSchema, updateQuestionSchema, updateAttemptSchema, finalizeAttemptSchema, questions, results, testAttempts } from './schema';
 
+const answerKeySchema = z.enum(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
+export const QUESTION_IMPORT_MAX_BYTES = 5 * 1024 * 1024;
+const importAnswersSchema = z.record(answerKeySchema, z.string().trim().min(1, 'no puede estar vacía').max(2000, 'supera los 2000 caracteres')).superRefine((answers, ctx) => {
+  const count = Object.keys(answers).length;
+  if (count < 2 || count > 8) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'debe incluir entre 2 y 8 respuestas', path: [] });
+  }
+});
+
+export const questionImportItemSchema = z.object({
+  pregunta: z.string().trim().min(1, 'no puede estar vacío').max(4000, 'supera los 4000 caracteres'),
+  respuestas: importAnswersSchema,
+  respuesta_correcta: answerKeySchema,
+  oposicion: z.string().trim().min(1, 'no puede estar vacía').max(200, 'supera los 200 caracteres').default('General'),
+}).strict().superRefine((question, ctx) => {
+  if (!(question.respuesta_correcta in question.respuestas)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'debe corresponder a una respuesta existente',
+      path: ['respuesta_correcta'],
+    });
+  }
+});
+
+export const questionImportContentSchema = z.array(questionImportItemSchema).min(1, 'debe incluir al menos una pregunta').max(1000, 'no puede superar 1000 preguntas');
+
+export const questionImportFilenameSchema = z.string().min(1, 'es obligatorio').max(150, 'no puede superar 150 caracteres')
+  .refine((filename) => !/[\x00-\x1f\x7f]/.test(filename), 'no puede contener caracteres de control')
+  .transform((filename) => filename.trim())
+  .pipe(z.string().min(1, 'es obligatorio')
+    .refine((filename) => filename.endsWith('.json') && !/[\/\\]/.test(filename), 'debe ser un nombre de archivo .json sin rutas'));
+
 export const errorSchemas = {
   validation: z.object({
     message: z.string(),
     field: z.string().optional(),
+    errors: z.array(z.string()).optional(),
   }),
   notFound: z.object({
     message: z.string(),
@@ -34,12 +67,14 @@ export const api = {
       method: 'POST' as const,
       path: '/api/tests/import',
       input: z.object({
-        filename: z.string(),
-        content: z.array(z.any()),
-      }),
+        filename: questionImportFilenameSchema,
+        content: questionImportContentSchema,
+      }).strict(),
       responses: {
         201: z.object({ success: z.boolean(), count: z.number() }),
         400: errorSchemas.validation,
+        413: errorSchemas.validation,
+        409: errorSchemas.conflict,
       },
     },
     get: {

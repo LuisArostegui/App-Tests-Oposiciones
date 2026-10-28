@@ -47,8 +47,8 @@ const attemptQuestions = [
 
 function resetFixture() {
   expired = false;
-  users["account-a"].tests[0] = { id: "account-a-private.json", count: 1, category: "Private A" };
-  users["account-b"].tests[0] = { id: "account-b-private.json", count: 1, category: "Private B" };
+  users["account-a"].tests = [{ id: "account-a-private.json", count: 1, category: "Private A" }];
+  users["account-b"].tests = [{ id: "account-b-private.json", count: 1, category: "Private B" }];
   delayedTestsUser = null;
   for (const release of releaseDelayedTests) release();
   releaseDelayedTests.clear();
@@ -230,6 +230,16 @@ createServer(async (request, response) => {
     if (delayLogout) await new Promise((resolve) => { releaseDelayedLogout = resolve; });
     expired = true;
     return respondJson(response, 200, { message: "Sesión cerrada" }, { "Set-Cookie": "sec05sid=; Path=/; Max-Age=0; SameSite=Lax" });
+  }
+  if (url.pathname === "/api/tests/import" && request.method === "POST") {
+    const user = expired ? undefined : users[sid];
+    if (!user) return respondJson(response, 401, { message: "No autenticado" });
+    const { filename, content } = await readJson(request);
+    if (user.tests.some((test) => test.id === filename)) {
+      return respondJson(response, 409, { message: "Ya tienes un banco con ese nombre." });
+    }
+    user.tests.push({ id: filename, count: content.length, category: content[0]?.oposicion ?? "General" });
+    return respondJson(response, 201, { success: true, count: content.length });
   }
   if (url.pathname === "/api/tests") {
     const user = expired ? undefined : users[sid];

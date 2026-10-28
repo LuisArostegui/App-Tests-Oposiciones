@@ -8,6 +8,8 @@ import { pool } from "./db";
 import { getSessionSecret, getTrustedProxyHops, isRegistrationEnabled, isRequestLoggingEnabled } from "./config";
 import { apiErrorHandler, createRequestLogger } from "./http-middleware";
 import { createAuthRateLimiter, createSameOriginGuard } from "./security-middleware";
+import { importJsonBodyParser } from "./body-parsers";
+import { api } from "@shared/routes";
 
 declare module "http" {
   interface IncomingMessage {
@@ -32,11 +34,15 @@ export async function createApplication(environment: NodeJS.ProcessEnv = process
     res.setHeader("Cache-Control", "no-store");
     next();
   });
-  app.use(express.json({
+  const defaultJsonBodyParser = express.json({
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
-  }));
+  });
+  app.use((req, res, next) => {
+    if (req.method === "POST" && req.path === api.tests.import.path) return next();
+    defaultJsonBodyParser(req, res, next);
+  });
   app.use(express.urlencoded({ extended: false }));
 
   const PgSession = connectPgSimple(session);
@@ -61,6 +67,11 @@ export async function createApplication(environment: NodeJS.ProcessEnv = process
   app.use(passport.initialize());
   app.use(passport.session());
   app.use(sameOriginGuard);
+
+  app.post(api.tests.import.path, (req, res, next) => {
+    if (req.isAuthenticated()) return next();
+    return res.status(401).json({ message: "No autenticado" });
+  }, importJsonBodyParser);
 
   await registerRoutes(httpServer, app, registrationEnabled);
   app.use(apiErrorHandler);

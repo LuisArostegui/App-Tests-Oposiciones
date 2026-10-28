@@ -34,13 +34,17 @@ function getRequestErrorType(error: unknown): string | undefined {
     : undefined;
 }
 
-export const apiErrorHandler: ErrorRequestHandler = (error, _req, res, next) => {
+export const apiErrorHandler: ErrorRequestHandler = (error, req, res, next) => {
   if (res.headersSent) {
     return next(error);
   }
 
   const requestErrorType = getRequestErrorType(error);
-  if (error instanceof ZodError || ["entity.parse.failed", "request.size.invalid", "request.aborted"].includes(requestErrorType ?? "")) {
+  if (["entity.parse.failed", "request.size.invalid", "request.aborted"].includes(requestErrorType ?? "")) {
+    const isImport = req.path === "/api/tests/import";
+    return res.status(400).json({ message: isImport ? "JSON mal formado. Revisa el archivo e inténtalo de nuevo." : "Solicitud no válida" });
+  }
+  if (error instanceof ZodError) {
     return res.status(400).json({ message: "Solicitud no válida" });
   }
   if (requestErrorType === "entity.too.large") {

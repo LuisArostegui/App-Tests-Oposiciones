@@ -307,16 +307,22 @@ test("BUG-04: concurrent rename and import keep each imported question wholly in
     releaseOwner();
     await blocker;
   }
-  assert.equal(importResponse.status, 201);
+  assert.ok(importResponse.status === 201 || importResponse.status === 409);
   assert.equal(renameResponse.status, 200);
 
   const oldQuestions = await storage.getQuestionsByTestId(oldId, ownerId);
   const newQuestions = await storage.getQuestionsByTestId(newId, ownerId);
   const originalQuestions = [...oldQuestions, ...newQuestions].filter((question) => existingQuestionIds.includes(question.id));
   assert.equal(originalQuestions.length, existingQuestionIds.length);
+  assert.equal(newQuestions.length, 2);
   assert.ok(oldQuestions.length === 0 || oldQuestions.length === 2);
-  assert.ok(newQuestions.length === 2 || newQuestions.length === 4);
-  assert.equal(oldQuestions.length + newQuestions.length, 4);
+  assert.equal(importResponse.status, oldQuestions.length === 2 ? 201 : 409);
+  assert.equal(oldQuestions.some(question => existingQuestionIds.includes(question.id)), false);
+  assert.equal(newQuestions.every(question => existingQuestionIds.includes(question.id)), true);
+  if (importResponse.status === 201) {
+    assert.deepEqual(oldQuestions.map(question => question.questionText).sort(), ["Importada A", "Importada B"]);
+  }
+  assert.equal(oldQuestions.length + newQuestions.length, importResponse.status === 201 ? 4 : 2);
   assert.equal(new Set([...oldQuestions, ...newQuestions].map((question) => question.userId)).size, 1);
 });
 

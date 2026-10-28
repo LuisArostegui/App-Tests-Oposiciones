@@ -1,0 +1,11 @@
+[
+  {
+    "pregunta": "¿Cuánto es 2 + 2?",
+    "respuestas": {
+      "A": "3",
+      "B": "4"
+    },
+    "respuesta_correcta": "B",
+    "oposicion": "General"
+  }
+]
