@@ -260,6 +260,11 @@ export class DatabaseStorage implements IStorage {
 
   async finalizeAttempt(id: number, userId: number, input: FinalizeAttemptInput): Promise<FinalizeAttemptOutcome> {
     return db.transaction(async (tx): Promise<FinalizeAttemptOutcome> => {
+      // Lifecycle transactions take the owner row first. This serializes finalization
+      // with rename/delete/import before either operation locks attempts or questions.
+      const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
+      if (!owner) return { status: "not_found" };
+
       const [attempt] = await tx.select().from(testAttempts).where(and(
         eq(testAttempts.id, id),
         eq(testAttempts.userId, userId),

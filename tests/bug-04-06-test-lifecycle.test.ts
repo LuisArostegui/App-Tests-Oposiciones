@@ -264,3 +264,76 @@ test("BUG-04: concurrent rename and import keep each imported question wholly in
   assert.equal(oldQuestions.length + newQuestions.length, 4);
   assert.equal(new Set([...oldQuestions, ...newQuestions].map((question) => question.userId)).size, 1);
 });
+
+test("BUG-04/06: concurrent rename and finalization use one lock order and preserve the complete result", async () => {
+  const oldId = uniqueTestId("rename-finalize-old");
+  const newId = uniqueTestId("rename-finalize-new");
+  const questionIds = await addTest(ownerId, oldId, 2);
+  const attemptId = await createAttempt(ownerId, oldId, questionIds);
+
+  let signalQuestionsLocked!: () => void;
+  let releaseQuestions!: () => void;
+  const questionsLocked = new Promise<void>((resolve) => { signalQuestionsLocked = resolve; });
+  const releaseBlocker = new Promise<void>((resolve) => { releaseQuestions = resolve; });
+  const blocker = (async () => db.transaction(async (tx) => {
+    await tx.select({ id: schema.questions.id }).from(schema.questions).where(
+      inArray(schema.questions.id, questionIds),
+    ).for("update");
+    signalQuestionsLocked();
+    await releaseBlocker;
+  }))();
+
+  async function waitForLockWaiters(minimum: number, pattern: "questions" | "either", timeoutMs = 5_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const waiting = await pool.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND pid <> pg_backend_pid()
+           AND wait_event_type = 'Lock'
+           AND ${pattern === "questions"
+             ? "query ILIKE '%questions%'"
+             : "(query ILIKE '%questions%' OR query ILIKE '%users%')"}`,
+      );
+      if (Number(waiting.rows[0]?.count) >= minimum) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.fail(`Expected ${minimum} PostgreSQL lock waiter(s) matching ${pattern}`);
+  }
+
+  try {
+    await questionsLocked;
+
+    const rename = request(`/api/tests/${encodeURIComponent(oldId)}/rename`, {
+      method: "PUT", body: JSON.stringify({ newName: newId }),
+    }, ownerId);
+    await waitForLockWaiters(1, "questions");
+
+    const finalizeResponse = request(`/api/attempts/${attemptId}/finalize`, {
+      method: "POST", body: JSON.stringify({ answers: { [questionIds[0]]: "A", [questionIds[1]]: "A" } }),
+    }, ownerId);
+    await waitForLockWaiters(2, "either");
+
+    releaseQuestions();
+    const [renameResult, finalizeResult] = await Promise.all([rename, finalizeResponse]);
+    assert.equal(renameResult.status, 200);
+    assert.equal(finalizeResult.status, 200, await finalizeResult.text());
+
+    const renamedQuestions = await storage.getQuestionsByTestId(newId, ownerId);
+    const completedAttempt = await storage.getAttempt(attemptId, ownerId);
+    const linkedResult = (await storage.getResults(ownerId)).find((result) => result.attemptId === attemptId);
+    assert.deepEqual(renamedQuestions.map((question) => question.id).sort(), [...questionIds].sort());
+    assert.equal(await storage.getQuestionsByTestId(oldId, ownerId).then((questions) => questions.length), 0);
+    assert.equal(completedAttempt?.testId, newId);
+    assert.equal(completedAttempt?.status, "completed");
+    assert.deepEqual(completedAttempt?.questionOrder, questionIds);
+    assert.equal(linkedResult?.testId, newId);
+    assert.equal(linkedResult?.attemptId, attemptId);
+    assert.equal(linkedResult?.totalQuestions, questionIds.length);
+    assert.equal(linkedResult?.correctCount, questionIds.length);
+  } finally {
+    releaseQuestions();
+    await blocker;
+  }
+});
