@@ -19,5 +19,12 @@ test("production service worker isolates API responses and keeps static assets a
     expect(results).toContain(`PASS ${assertion}`);
   }
 
+  await page.evaluate(() => caches.delete("opostest-dynamic-v2"));
+  const offlinePage = await context.newPage();
+  const offlineNavigation = await offlinePage.goto("http://127.0.0.1:4174/");
+  expect(offlineNavigation?.status()).toBe(200);
+  await expect(offlinePage.locator("#root")).toHaveCount(1);
+  await expect(offlinePage.locator("body")).not.toContainText("OLD V1 SHELL");
+
   await context.close();
 });

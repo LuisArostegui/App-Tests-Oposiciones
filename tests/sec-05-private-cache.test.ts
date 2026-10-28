@@ -13,7 +13,7 @@ type WorkerEvent = {
   waitUntil?: (promise: Promise<unknown>) => void;
 };
 
-async function createWorkerHarness(options: { fetch?: typeof fetch; initialCaches?: Map<string, Map<string, Response>> } = {}) {
+async function createWorkerHarness(options: { fetch?: typeof fetch; initialCaches?: Map<string, Map<string, Response>>; precacheResponses?: Map<string, Response> } = {}) {
   const listeners = new Map<string, (event: WorkerEvent) => void>();
   const storedCaches = options.initialCaches ?? new Map<string, Map<string, Response>>();
   const fetchMock = options.fetch ?? fetch;
@@ -26,7 +26,10 @@ async function createWorkerHarness(options: { fetch?: typeof fetch; initialCache
       }
       return {
         async addAll(urls: string[]) {
-          for (const url of urls) cache!.set(new URL(url, "https://app.test").href, new Response(url));
+          for (const url of urls) {
+            const key = new URL(url, "https://app.test").href;
+            cache!.set(key, options.precacheResponses?.get(key)?.clone() ?? new Response(url));
+          }
         },
         async put(request: Request | string, response: Response) {
           const url = request instanceof Request ? request.url : new URL(request, "https://app.test").href;
@@ -109,16 +112,44 @@ test("SEC-05: activation removes only this application's old caches and keeps st
   assert.equal(harness.caches.has("another-app-runtime"), true);
 });
 
+test("SEC-05: migration keeps the new shell and versioned assets instead of copying old HTML or unhashed files", async () => {
+  const shellKey = "https://app.test/";
+  const hashedAssetKey = "https://app.test/assets/index-AbCd1234.css";
+  const freshShell = new Response("<html>new v2 shell</html>", { headers: { "Content-Type": "text/html" } });
+  const freshAsset = new Response("new v2 stylesheet", { headers: { "Content-Type": "text/css" } });
+  const harness = await createWorkerHarness({
+    precacheResponses: new Map([[shellKey, freshShell]]),
+    initialCaches: new Map([
+      ["opostest-static-v2", new Map([[shellKey, freshShell.clone()], [hashedAssetKey, freshAsset.clone()]])],
+      ["opostest-static-v1", new Map([
+        [shellKey, new Response("<html>OLD V1 SHELL</html>", { headers: { "Content-Type": "text/html" } })],
+        ["https://app.test/old/index.html", new Response("<html>OLD V1 DOCUMENT</html>", { headers: { "Content-Type": "text/html" } })],
+        [hashedAssetKey, new Response("old stylesheet", { headers: { "Content-Type": "text/css" } })],
+        ["https://app.test/assets/unhashed.css", new Response("unhashed stylesheet", { headers: { "Content-Type": "text/css" } })],
+      ])],
+    ]),
+  });
+
+  await harness.lifecycle("install");
+  await harness.lifecycle("activate");
+
+  const newStaticCache = harness.caches.get("opostest-static-v2")!;
+  assert.equal(await newStaticCache.get(shellKey)?.text(), "<html>new v2 shell</html>");
+  assert.equal(newStaticCache.has("https://app.test/old/index.html"), false);
+  assert.equal(await newStaticCache.get(hashedAssetKey)?.text(), "new v2 stylesheet");
+  assert.equal(newStaticCache.has("https://app.test/assets/unhashed.css"), false);
+});
+
 test("SEC-05: static assets keep an offline cached response", async () => {
   const harness = await createWorkerHarness({
     initialCaches: new Map([
-      ["opostest-static-v1", new Map([["https://app.test/assets/main.css", new Response("cached css")]])],
+      ["opostest-static-v1", new Map([["https://app.test/assets/main-AbCd1234.css", new Response("cached css", { headers: { "Content-Type": "text/css" } })]])],
       ["opostest-dynamic-v1", new Map([["https://app.test/api/tests", new Response("private data")]])],
     ]),
     fetch: async () => { throw new TypeError("offline"); },
   });
   await harness.lifecycle("activate");
-  const response = await harness.fetch(new Request("https://app.test/assets/main.css"));
+  const response = await harness.fetch(new Request("https://app.test/assets/main-AbCd1234.css"));
   assert.equal(await response?.text(), "cached css");
   const apiCache = [...harness.caches.values()].find((cache) => cache.has("https://app.test/api/tests"));
   assert.equal(apiCache, undefined);

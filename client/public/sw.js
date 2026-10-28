@@ -2,6 +2,25 @@ const CACHE_VERSION = 'v2';
 const CACHE_PREFIX = 'opostest-';
 const STATIC_CACHE_NAME = `opostest-static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE_NAME = `opostest-dynamic-${CACHE_VERSION}`;
+const VERSIONED_STATIC_ASSET = /^\/assets\/[A-Za-z0-9_.-]+-[A-Za-z0-9_-]{8,}\.(?:avif|css|gif|ico|jpe?g|js|mjs|otf|png|svg|ttf|webp|woff2?)$/i;
+const SAFE_STATIC_CONTENT_TYPES = new Set([
+  'application/font-woff',
+  'application/javascript',
+  'application/vnd.ms-fontobject',
+  'font/otf',
+  'font/ttf',
+  'font/woff',
+  'font/woff2',
+  'image/avif',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/svg+xml',
+  'image/webp',
+  'image/x-icon',
+  'text/css',
+  'text/javascript',
+]);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -34,13 +53,20 @@ async function migrateAndCleanCaches() {
     const oldCache = await caches.open(cacheName);
     for (const request of await oldCache.keys()) {
       const url = new URL(request.url);
-      if (request.method === 'GET'
-        && url.origin === self.location.origin
-        && url.pathname !== '/api'
-        && !url.pathname.startsWith('/api/')) {
-        const response = await oldCache.match(request);
-        if (response) await staticCache.put(request, response);
-      }
+      if (request.method !== 'GET'
+        || request.mode === 'navigate'
+        || url.origin !== self.location.origin
+        || url.pathname === '/api'
+        || url.pathname.startsWith('/api/')
+        || !VERSIONED_STATIC_ASSET.test(url.pathname)) continue;
+
+      const response = await oldCache.match(request);
+      if (!response?.ok) continue;
+      const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+      if (!contentType || !SAFE_STATIC_CONTENT_TYPES.has(contentType)) continue;
+      if (await staticCache.match(request)) continue;
+
+      await staticCache.put(request, response);
     }
   }
 

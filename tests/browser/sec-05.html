@@ -20,6 +20,9 @@ try {
   results.textContent = `Browser APIs: serviceWorker=${Boolean(navigator.serviceWorker)}, caches=${Boolean(window.caches)}`;
   await fetch("/__test/online", { method: "POST" });
   if (!sessionStorage.getItem("sec05-seeded")) {
+    await caches.open("opostest-static-v1").then((cache) => cache.put(
+      "/", new Response("<!doctype html><title>OLD V1 SHELL</title>", { headers: { "Content-Type": "text/html" } }),
+    ));
     await caches.open("opostest-dynamic-v1").then((cache) => cache.put(
       "/api/private", new Response("PRIVATE OLD RESPONSE"),
     ));
@@ -62,6 +65,7 @@ try {
   const offlineApi = await fetch("/api/offline");
   const offlineBody = await offlineApi.text();
   check("Offline API fails without stale data or HTML", offlineApi.status === 503 && /offline|conexión/i.test(offlineBody) && !/<html/i.test(offlineBody));
+  await caches.delete("opostest-dynamic-v2");
   results.dataset.result = "pass";
 } catch (error) {
   if (error instanceof Error && error.message.startsWith("Reloading once")) return;
