@@ -126,6 +126,43 @@ test("retrying question lookup keeps the conflict until every attempt question i
   expect(state.attemptState.status).toBe("in_progress");
 });
 
+test("finishing before autosave keeps local answers and question index after conflict retry", async ({ page, request }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await login(page, request);
+  await request.post("/__e2e/seed-next-attempt", { data: { answers: { "11": "A" }, currentIndex: 0 } });
+  await startAttempt(page);
+  await expect.poll(async () => (await (await request.get("/__e2e/attempt-state")).json()).attemptReadCount).toBeGreaterThan(0);
+  await page.evaluate(() => {
+    const originalSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = (handler, timeout, ...args) =>
+      originalSetTimeout(handler, timeout === 500 ? 60_000 : timeout, ...args);
+  });
+  await request.post("/__e2e/omit-attempt-question");
+  await page.getByRole("button", { name: "B Incorrecta" }).click();
+  await page.getByTestId("button-next").click();
+  await expect(page.getByText("Pregunta de prueba dos")).toBeVisible();
+  await page.getByTestId("button-finish").click();
+
+  await expect(page.getByTestId("attempt-question-conflict")).toBeVisible();
+  let state = await (await request.get("/__e2e/attempt-state")).json();
+  expect(state.attemptState.answers["11"]).toBe("A");
+  expect(state.attemptState.currentIndex).toBe(0);
+
+  await request.post("/__e2e/restore-attempt-question");
+  await page.getByTestId("button-retry-questions").click();
+
+  await expect(page.getByText("Pregunta de prueba dos")).toBeVisible();
+  await page.getByRole("button", { name: "Anterior" }).click();
+  await expect(page.getByRole("button", { name: "B Incorrecta" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page).toHaveURL(/\?attempt=808$/);
+  await page.getByTestId("button-next").click();
+  await page.getByTestId("button-finish").click();
+  await expect.poll(async () => (await (await request.get("/__e2e/attempt-state")).json()).attemptState.status).toBe("completed");
+  state = await (await request.get("/__e2e/attempt-state")).json();
+  expect(state.finalizationPayloads).toEqual([{ answers: { "11": "B" } }]);
+  expect(state.attemptState.answers["11"]).toBe("B");
+});
+
 test("special test names navigate through one encoded path and the manager preselects the chosen test", async ({ page, request }) => {
   const testId = "Tema #1 % aprobado Ánimo.json";
   await request.post("/__e2e/test-name", { data: { testId } });

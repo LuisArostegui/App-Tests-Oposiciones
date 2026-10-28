@@ -23,6 +23,7 @@ const releaseDelayedTests = new Set();
 let delayLogout = false;
 let releaseDelayedLogout;
 let attemptState = null;
+let nextAttemptSnapshot = null;
 let failNextAttemptSave = false;
 let delayAttemptSave = false;
 let releaseAttemptSave;
@@ -55,6 +56,7 @@ function resetFixture() {
   releaseDelayedLogout?.();
   releaseDelayedLogout = undefined;
   attemptState = null;
+  nextAttemptSnapshot = null;
   failNextAttemptSave = false;
   delayAttemptSave = false;
   releaseAttemptSave?.();
@@ -207,6 +209,10 @@ createServer(async (request, response) => {
   if (url.pathname === "/__e2e/attempt-state" && request.method === "GET") {
     return respondJson(response, 200, { attemptState, attemptReadCount, failNextAttemptRead, finalizationPayloads, attemptSaveRequests, attemptSaveSnapshots, results, dropNextFinalizeResponse });
   }
+  if (url.pathname === "/__e2e/seed-next-attempt" && request.method === "POST") {
+    nextAttemptSnapshot = await readJson(request);
+    return response.writeHead(204).end();
+  }
   if (url.pathname === "/api/auth/me") {
     const user = expired ? undefined : users[sid];
     return user ? respondJson(response, 200, { id: user.id, username: user.username }) : respondJson(response, 401, { message: "No autenticado" });
@@ -250,7 +256,8 @@ createServer(async (request, response) => {
     const user = expired ? undefined : users[sid];
     if (!user) return respondJson(response, 401, { message: "No autenticado" });
     const body = await readJson(request);
-    attemptState = { id: 808, ...body, answers: {}, currentIndex: 0, status: "in_progress", userId: user.id };
+    attemptState = { id: 808, ...body, answers: nextAttemptSnapshot?.answers ?? {}, currentIndex: nextAttemptSnapshot?.currentIndex ?? 0, status: "in_progress", userId: user.id };
+    nextAttemptSnapshot = null;
     return respondJson(response, 201, attemptState);
   }
   if (url.pathname === "/api/attempts/808" && request.method === "GET") {
@@ -291,6 +298,7 @@ createServer(async (request, response) => {
     const user = expired ? undefined : users[sid];
     if (!user) return respondJson(response, 401, { message: "No autenticado" });
     const body = await readJson(request);
+    if (missingAttemptQuestion) return respondJson(response, 409, { message: "Faltan preguntas del intento" });
     if (delayAttemptFinalize) await new Promise((resolve) => { releaseAttemptFinalize = resolve; });
     let result = results.find((existing) => existing.attemptId === 808);
     if (!result) {

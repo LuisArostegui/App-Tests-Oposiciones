@@ -380,9 +380,6 @@ export default function TestView() {
 
     resumeHandled.current = true;
     setActiveQuestions(orderedQuestions);
-    setCurrentIndex(Math.min(existingAttempt.currentIndex, orderedQuestions.length - 1));
-    setAnswers(existingAttempt.answers as Record<number, string> || {});
-    setAttemptId(existingAttempt.id);
     setIsStarted(true);
     setAttemptQuestionConflict(false);
   };
