@@ -267,13 +267,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateAttempt(id: number, userId: number, update: UpdateAttempt): Promise<TestAttempt | undefined> {
+    const { expectedVersion, ...changes } = update;
     const [updated] = await db
       .update(testAttempts)
-      .set(update)
+      .set({ ...changes, writeVersion: sql`${testAttempts.writeVersion} + 1` })
       .where(and(
         eq(testAttempts.id, id),
         eq(testAttempts.userId, userId),
         eq(testAttempts.status, "in_progress"),
+        eq(testAttempts.writeVersion, expectedVersion),
       ))
       .returning();
     return updated;

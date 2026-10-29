@@ -32,6 +32,7 @@ export const testAttempts = pgTable("test_attempts", {
   answers: jsonb("answers").notNull().default({}),
   questionOrder: jsonb("question_order").notNull(),
   totalQuestions: integer("total_questions").notNull(),
+  writeVersion: integer("write_version").notNull().default(0),
   correctCount: integer("correct_count").default(0),
   score: integer("score").default(0),
   startedAt: timestamp("started_at").defaultNow(),
@@ -63,7 +64,7 @@ export const sessions = pgTable("session", {
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertQuestionSchema = createInsertSchema(questions).omit({ id: true, userId: true }).strict();
 export const insertResultSchema = createInsertSchema(results).omit({ id: true, completedAt: true, userId: true }).strict();
-export const insertAttemptSchema = createInsertSchema(testAttempts).omit({ id: true, startedAt: true, completedAt: true });
+export const insertAttemptSchema = createInsertSchema(testAttempts).omit({ id: true, startedAt: true, completedAt: true, writeVersion: true });
 
 export const updateQuestionSchema = z.object({
   questionText: z.string().optional(),
@@ -73,6 +74,7 @@ export const updateQuestionSchema = z.object({
 }).strict();
 
 export const updateAttemptSchema = z.object({
+  expectedVersion: z.number().int().nonnegative(),
   currentIndex: z.number().int().nonnegative().optional(),
   answers: z.record(z.string(), z.string()).optional(),
 }).strict();

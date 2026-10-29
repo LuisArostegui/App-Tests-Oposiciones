@@ -94,3 +94,28 @@ test("continuing during an attempt refetch uses the refreshed answer snapshot", 
 
   await request.post("/__e2e/release-attempt-read");
 });
+
+test("a version conflict refreshes the attempt version and retries the user's latest snapshot", async ({ page, request }) => {
+  await login(page);
+  await page.getByTestId("link-test-account-a-private.json").click();
+  await page.getByTestId("button-start-test").click();
+  await expect.poll(async () => (await (await request.get("/__e2e/attempt-state")).json()).attemptReadCount).toBeGreaterThan(0);
+  await page.evaluate(() => {
+    const originalSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = (handler, timeout, ...args) => originalSetTimeout(handler, timeout === 500 ? 60_000 : timeout, ...args);
+  });
+  await page.getByRole("button", { name: "A Correcta" }).click();
+  await request.post("/__e2e/bump-attempt-write-version");
+
+  const conflict = page.waitForResponse((response) =>
+    response.url().endsWith("/api/attempts/808") && response.request().method() === "PUT" && response.status() === 409,
+  );
+  await page.getByTestId("button-save-exit").click();
+  await conflict;
+  await expect(page).toHaveURL(/\/results$/);
+
+  const state = await (await request.get("/__e2e/attempt-state")).json();
+  expect(state.attemptSaveSnapshots.map(({ expectedVersion }) => expectedVersion)).toEqual([0, 1]);
+  expect(state.attemptState.answers).toEqual({ "11": "A" });
+  expect(state.attemptState.writeVersion).toBe(2);
+});

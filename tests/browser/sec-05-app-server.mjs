@@ -248,6 +248,10 @@ const server = createServer(async (request, response) => {
     nextAttemptSnapshot = await readJson(request);
     return response.writeHead(204).end();
   }
+  if (url.pathname === "/__e2e/bump-attempt-write-version" && request.method === "POST") {
+    if (attemptState) attemptState = { ...attemptState, writeVersion: attemptState.writeVersion + 1 };
+    return response.writeHead(204).end();
+  }
   if (url.pathname === "/api/auth/me") {
     const user = expired ? undefined : users[sid];
     return user ? respondJson(response, 200, { id: user.id, username: user.username }) : respondJson(response, 401, { message: "No autenticado" });
@@ -308,7 +312,7 @@ const server = createServer(async (request, response) => {
     const user = expired ? undefined : users[sid];
     if (!user) return respondJson(response, 401, { message: "No autenticado" });
     const body = await readJson(request);
-    attemptState = { id: 808, ...body, answers: nextAttemptSnapshot?.answers ?? {}, currentIndex: nextAttemptSnapshot?.currentIndex ?? 0, status: "in_progress", userId: user.id };
+    attemptState = { id: 808, ...body, answers: nextAttemptSnapshot?.answers ?? {}, currentIndex: nextAttemptSnapshot?.currentIndex ?? 0, writeVersion: 0, status: "in_progress", userId: user.id };
     nextAttemptSnapshot = null;
     return respondJson(response, 201, attemptState);
   }
@@ -339,7 +343,11 @@ const server = createServer(async (request, response) => {
     if (delayAttemptSave) await new Promise((resolve) => { releaseAttemptSave = resolve; });
     if (delayAttemptSaveRequestNumber === attemptSaveRequests.length) await new Promise((resolve) => { releaseDelayedAttemptSave = resolve; });
     attemptSaveSnapshots.push(snapshot);
-    attemptState = { ...attemptState, ...snapshot };
+    if (snapshot.expectedVersion !== attemptState.writeVersion) {
+      return respondJson(response, 409, { message: "La versión del intento cambió mientras se guardaba", code: "ATTEMPT_VERSION_CONFLICT" });
+    }
+    const { expectedVersion: _expectedVersion, ...updates } = snapshot;
+    attemptState = { ...attemptState, ...updates, writeVersion: attemptState.writeVersion + 1 };
     return respondJson(response, 200, attemptState);
   }
   if (url.pathname === "/api/results" && request.method === "GET") {

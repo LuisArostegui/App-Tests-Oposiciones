@@ -100,14 +100,35 @@ export function useUpdateAttempt() {
     mutationFn: async ({ id, ...updates }: { id: number; currentIndex?: number; answers?: Record<string, string> }) => {
       const url = buildUrl(api.attempts.update.path, { id });
       return enqueueAttemptUpdate(id, async () => {
-        const res = await apiFetch(url, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(updates),
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!res.ok) await throwApiError(res);
-        return api.attempts.update.responses[200].parse(await res.json());
+        const refreshAttempt = async () => {
+          const response = await apiFetch(url, { signal: AbortSignal.timeout(10_000) });
+          if (!response.ok) await throwApiError(response);
+          const attempt = api.attempts.get.responses[200].parse(await response.json());
+          queryClient.setQueryData([api.attempts.get.path, id], attempt);
+          return attempt;
+        };
+        const cachedAttempt = queryClient.getQueryData<{ writeVersion: number }>([api.attempts.get.path, id]);
+        let writeVersion = cachedAttempt?.writeVersion ?? (await refreshAttempt()).writeVersion;
+
+        for (let retry = 0; retry < 3; retry += 1) {
+          const response = await apiFetch(url, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...updates, expectedVersion: writeVersion }),
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (response.status === 409) {
+            const errorBody = await response.clone().json().catch(() => null) as { code?: unknown } | null;
+            if (errorBody?.code === "ATTEMPT_VERSION_CONFLICT" && retry < 2) {
+              writeVersion = (await refreshAttempt()).writeVersion;
+              continue;
+            }
+          }
+          if (!response.ok) await throwApiError(response);
+          return api.attempts.update.responses[200].parse(await response.json());
+        }
+
+        throw new Error("No se pudo sincronizar la versión del intento.");
       }, `update:${serializeAttemptSnapshot(updates)}`);
     },
     onSuccess: (data, variables) => {

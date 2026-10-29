@@ -168,7 +168,7 @@ test("SEC-01: question and attempt edits and deletes enforce ownership and prese
 
   const ownerAttemptUpdate = await request(`/api/attempts/${attemptId}`, {
     method: "PUT",
-    body: JSON.stringify({ currentIndex: 1 }),
+    body: JSON.stringify({ expectedVersion: originalAttempt.writeVersion, currentIndex: 1 }),
   }, ownerId);
   assert.equal(ownerAttemptUpdate.status, 200);
 
@@ -221,7 +221,9 @@ test("SEC-01: question and attempt edits and deletes enforce ownership and prese
   for (const resource of ["questions", "attempts"] as const) {
     const id = resource === "questions" ? questionId : attemptId;
     const path = `/api/${resource}/${id}`;
-    const updateBody = resource === "questions" ? { questionText: "Cambio ajeno" } : { currentIndex: 2 };
+    const updateBody = resource === "questions"
+      ? { questionText: "Cambio ajeno" }
+      : { expectedVersion: originalAttempt.writeVersion + 1, currentIndex: 2 };
     const foreignUpdate = await request(path, { method: "PUT", body: JSON.stringify(updateBody) }, otherUserId);
     assert.equal(foreignUpdate.status, 404);
     const foreignDelete = await request(path, { method: "DELETE" }, otherUserId);

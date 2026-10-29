@@ -99,7 +99,7 @@ test("A to B to A snapshots stay ordered and Save and Exit waits for the latest 
   await request.post("/__e2e/release-delayed-attempt-save");
   await expect(page).toHaveURL(/\/results$/);
   const state = await (await request.get("/__e2e/attempt-state")).json();
-  expect(state.attemptSaveSnapshots.map(({ currentIndex }) => currentIndex)).toEqual([0, 1, 0]);
+  expect(state.attemptSaveSnapshots.map(({ currentIndex }) => currentIndex)).toEqual([0, 1, 1, 0, 0]);
   expect(state.attemptState.currentIndex).toBe(0);
   expect(state.attemptState.answers).toEqual({ "11": "A" });
 });

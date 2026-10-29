@@ -80,6 +80,10 @@ async function createRunnerSandbox({ includeAttemptLink = true, insertedMigratio
       await cp(attemptLinkPath, path.join(migrationsDirectory, "20261028_attempt_result_link.sql"));
     }
   }
+  await cp(
+    path.join(projectRoot, "migrations", "20261029_attempt_write_version.sql"),
+    path.join(migrationsDirectory, "20261029_attempt_write_version.sql"),
+  );
   if (insertedMigration) {
     await writeFile(path.join(migrationsDirectory, insertedMigration.filename), insertedMigration.contents);
   }
@@ -133,9 +137,10 @@ test("migrate initializes an empty database once, including concurrent invocatio
     ]));
 
     const applied = await client.query("SELECT version, filename, checksum, applied_at FROM opostest_schema_migrations ORDER BY version");
-    assert.equal(applied.rowCount, 2);
+    assert.equal(applied.rowCount, 3);
     assert.match(applied.rows[0].filename, /baseline\.sql$/);
     assert.equal(applied.rows[1].filename, "20261028_attempt_result_link.sql");
+    assert.equal(applied.rows[2].filename, "20261029_attempt_write_version.sql");
     const baselineContents = await readFile(path.join(projectRoot, "migrations", applied.rows[0].filename), "utf8");
     const expectedLfChecksum = createHash("sha256").update(baselineContents.replace(/\r\n/g, "\n")).digest("hex");
     assert.equal(applied.rows[0].checksum, expectedLfChecksum, "new history entries use the canonical LF checksum");
@@ -144,6 +149,12 @@ test("migrate initializes an empty database once, including concurrent invocatio
       "SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'results' AND column_name = 'attempt_id'",
     );
     assert.equal(attemptColumn.rows[0].is_nullable, "YES");
+
+    const writeVersion = await client.query(
+      "SELECT is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'test_attempts' AND column_name = 'write_version'",
+    );
+    assert.equal(writeVersion.rows[0].is_nullable, "NO");
+    assert.match(writeVersion.rows[0].column_default, /^0/);
 
     const beforeRepeat = applied.rows.map((row) => row.applied_at.toISOString());
     const repeat = await runMigrationCommand(emptyDatabase, "migrate");
@@ -290,7 +301,7 @@ test("baseline adopts an existing pre-link schema and preserves legacy results",
     const rows = await adopted.query("SELECT test_id, attempt_id FROM results");
     assert.deepEqual(rows.rows, [{ test_id: "legacy-bank", attempt_id: null }]);
     const history = await adopted.query("SELECT version FROM opostest_schema_migrations ORDER BY version");
-    assert.equal(history.rowCount, 2);
+    assert.equal(history.rowCount, 3);
   } finally {
     await adopted.end();
   }
@@ -334,6 +345,7 @@ test("baseline recognizes a current db:push schema without replaying the result-
     assert.deepEqual(history.rows.map((row) => row.filename), [
       "20261028_000_baseline.sql",
       "20261028_attempt_result_link.sql",
+      "20261029_attempt_write_version.sql",
     ]);
   } finally {
     await adopted.end();
