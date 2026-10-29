@@ -222,6 +222,18 @@ async function hasAttemptLink(client) {
   return true;
 }
 
+async function hasAttemptWriteVersion(client) {
+  const column = await client.query(`
+    SELECT data_type, is_nullable, column_default FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'test_attempts' AND column_name = 'write_version'
+  `);
+  if (column.rowCount === 0) return false;
+  if (column.rows[0].data_type !== "integer" || column.rows[0].is_nullable !== "NO" || !/^0/.test(column.rows[0].column_default ?? "")) {
+    throw new Error("test_attempts.write_version debe ser integer, NOT NULL y tener default 0.");
+  }
+  return true;
+}
+
 async function withMigrationLock(client, action) {
   await client.query("SELECT pg_advisory_lock($1)", [lockKey]);
   try {
@@ -308,6 +320,10 @@ async function baseline(client, migrations) {
   }
   await validateExistingSchema(client);
   const existingAttemptLink = await hasAttemptLink(client);
+  const existingAttemptWriteVersion = await hasAttemptWriteVersion(client);
+  if (existingAttemptWriteVersion && !existingAttemptLink) {
+    throw new Error("test_attempts.write_version no se puede adoptar sin results.attempt_id aplicado.");
+  }
 
   const baselineMigration = migrations[0];
   await client.query("BEGIN");
@@ -323,6 +339,14 @@ async function baseline(client, migrations) {
       await client.query(
         `INSERT INTO ${historyTable} (version, filename, checksum) VALUES ($1, $2, $3)`,
         [attemptMigration.filename, attemptMigration.filename, attemptMigration.checksum],
+      );
+    }
+    if (existingAttemptWriteVersion) {
+      const writeVersionMigration = migrations.find((migration) => migration.filename === "20261029_attempt_write_version.sql");
+      if (!writeVersionMigration) throw new Error("No se encontró la migración de versión de escritura del intento.");
+      await client.query(
+        `INSERT INTO ${historyTable} (version, filename, checksum) VALUES ($1, $2, $3)`,
+        [writeVersionMigration.filename, writeVersionMigration.filename, writeVersionMigration.checksum],
       );
     }
     await client.query("COMMIT");

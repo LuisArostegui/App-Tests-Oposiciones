@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch, capturePrivateSessionEpoch, isPrivateSessionEpochCurrent } from "@/lib/queryClient";
@@ -7,24 +7,26 @@ import type { FinalizeAttemptInput } from "@shared/schema";
 import { throwApiError } from "@/lib/api-error";
 
 const attemptUpdateQueues = new Map<number, Promise<unknown>>();
-const pendingAttemptUpdates = new Map<number, Map<string, Promise<unknown>>>();
+const pendingAttemptUpdates = new Map<number, Map<string, { sessionEpoch: number; promise: Promise<unknown> }>>();
 
-export async function enqueueAttemptUpdate<T>(id: number, update: () => Promise<T>, dedupeKey?: string): Promise<T> {
+export async function enqueueAttemptUpdate<T>(id: number, update: (sessionEpoch: number) => Promise<T>, dedupeKey?: string): Promise<T> {
+  const sessionEpoch = capturePrivateSessionEpoch();
   const pending = dedupeKey ? pendingAttemptUpdates.get(id)?.get(dedupeKey) : undefined;
   // Coalesce only the latest queued operation. An older matching snapshot may
-  // have a different write queued after it and must not leapfrog that write.
-  if (pending && attemptUpdateQueues.get(id) === pending) return pending as Promise<T>;
+  // have a different write queued after it, or belong to another session.
+  if (pending && pending.sessionEpoch === sessionEpoch && attemptUpdateQueues.get(id) === pending.promise) {
+    return pending.promise as Promise<T>;
+  }
 
-  const sessionEpoch = capturePrivateSessionEpoch();
   const previous = attemptUpdateQueues.get(id) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(() => {
     if (!isPrivateSessionEpochCurrent(sessionEpoch)) throw new Error("La sesión cambió antes de guardar este intento.");
-    return update();
+    return update(sessionEpoch);
   });
   attemptUpdateQueues.set(id, current);
   if (dedupeKey) {
-    const requests = pendingAttemptUpdates.get(id) ?? new Map<string, Promise<unknown>>();
-    requests.set(dedupeKey, current);
+    const requests = pendingAttemptUpdates.get(id) ?? new Map<string, { sessionEpoch: number; promise: Promise<unknown> }>();
+    requests.set(dedupeKey, { sessionEpoch, promise: current });
     pendingAttemptUpdates.set(id, requests);
   }
   try {
@@ -33,7 +35,7 @@ export async function enqueueAttemptUpdate<T>(id: number, update: () => Promise<
     if (attemptUpdateQueues.get(id) === current) attemptUpdateQueues.delete(id);
     if (dedupeKey) {
       const requests = pendingAttemptUpdates.get(id);
-      if (requests?.get(dedupeKey) === current) requests.delete(dedupeKey);
+      if (requests?.get(dedupeKey)?.promise === current) requests.delete(dedupeKey);
       if (requests?.size === 0) pendingAttemptUpdates.delete(id);
     }
   }
@@ -45,6 +47,61 @@ function serializeAttemptSnapshot(value: object): string {
     ? Object.fromEntries(Object.entries(snapshot.answers).sort(([first], [second]) => first.localeCompare(second)))
     : undefined;
   return JSON.stringify({ currentIndex: snapshot.currentIndex, answers });
+}
+
+export async function updateAttemptWithVersion(
+  id: number,
+  updates: { currentIndex?: number; answers?: Record<string, string> },
+  queryClient: QueryClient,
+  sessionEpoch: number,
+) {
+  const assertSessionCurrent = () => {
+    if (!isPrivateSessionEpochCurrent(sessionEpoch)) {
+      throw new Error("La sesión cambió mientras se guardaba este intento.");
+    }
+  };
+  assertSessionCurrent();
+  const url = buildUrl(api.attempts.update.path, { id });
+  const refreshAttempt = async () => {
+    const response = await apiFetch(url, { signal: AbortSignal.timeout(10_000) });
+    assertSessionCurrent();
+    if (!response.ok) await throwApiError(response);
+    const payload = await response.json();
+    assertSessionCurrent();
+    const attempt = api.attempts.get.responses[200].parse(payload);
+    assertSessionCurrent();
+    queryClient.setQueryData([api.attempts.get.path, id], attempt);
+    return attempt;
+  };
+  assertSessionCurrent();
+  const cachedAttempt = queryClient.getQueryData<{ writeVersion: number }>([api.attempts.get.path, id]);
+  let writeVersion = cachedAttempt?.writeVersion ?? (await refreshAttempt()).writeVersion;
+
+  for (let retry = 0; retry < 3; retry += 1) {
+    assertSessionCurrent();
+    const response = await apiFetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...updates, expectedVersion: writeVersion }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    assertSessionCurrent();
+    if (response.status === 409) {
+      const errorBody = await response.clone().json().catch(() => null) as { code?: unknown } | null;
+      assertSessionCurrent();
+      if (errorBody?.code === "ATTEMPT_VERSION_CONFLICT" && retry < 2) {
+        writeVersion = (await refreshAttempt()).writeVersion;
+        assertSessionCurrent();
+        continue;
+      }
+    }
+    if (!response.ok) await throwApiError(response);
+    const payload = await response.json();
+    assertSessionCurrent();
+    return api.attempts.update.responses[200].parse(payload);
+  }
+
+  throw new Error("No se pudo sincronizar la versión del intento.");
 }
 
 export function useAttempts() {
@@ -96,19 +153,19 @@ export function useUpdateAttempt() {
   const queryClient = useQueryClient();
 
   return usePrivateMutation({
+    networkMode: "always",
     mutationFn: async ({ id, ...updates }: { id: number; currentIndex?: number; answers?: Record<string, string> }) => {
-      const url = buildUrl(api.attempts.update.path, { id });
-      return enqueueAttemptUpdate(id, async () => {
-        const res = await apiFetch(url, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(updates),
-        });
-        if (!res.ok) await throwApiError(res);
-        return api.attempts.update.responses[200].parse(await res.json());
-      }, `update:${serializeAttemptSnapshot(updates)}`);
+      return enqueueAttemptUpdate(
+        id,
+        (sessionEpoch) => updateAttemptWithVersion(id, updates, queryClient, sessionEpoch),
+        `update:${serializeAttemptSnapshot(updates)}`,
+      );
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData([api.attempts.get.path, variables.id], data);
+      queryClient.setQueryData<Array<typeof data>>([api.attempts.list.path], (attempts) =>
+        attempts?.map((attempt) => attempt.id === data.id ? data : attempt),
+      );
       queryClient.invalidateQueries({ queryKey: [api.attempts.list.path] });
       queryClient.invalidateQueries({ queryKey: [api.attempts.get.path, variables.id] });
     },

@@ -6,6 +6,7 @@ import { eq, inArray } from "drizzle-orm";
 import express from "express";
 import session from "express-session";
 import { createServer, type Server } from "node:http";
+import { enqueueAttemptUpdate } from "../client/src/hooks/use-attempts";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 if (!testDatabaseUrl) throw new Error("TEST_DATABASE_URL must point to an isolated test database");
@@ -32,6 +33,7 @@ let secondQuestionId: number;
 let foreignQuestionId: number;
 const questionIds: number[] = [];
 const attemptIds: number[] = [];
+let holdNextAttemptUpdate: (() => Promise<void>) | undefined;
 
 before(async () => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -76,6 +78,15 @@ before(async () => {
     const username = sessionUserId === ownerId ? `bug0203-owner-${suffix}` : `bug0203-other-${suffix}`;
     req.login({ id: sessionUserId, username }, (error) => error ? next(error) : res.sendStatus(204));
   });
+  app.use((req, _res, next) => {
+    if (req.method === "PUT" && /^\/api\/attempts\/\d+$/.test(req.path) && holdNextAttemptUpdate) {
+      const hold = holdNextAttemptUpdate;
+      holdNextAttemptUpdate = undefined;
+      void hold().then(() => next(), next);
+      return;
+    }
+    next();
+  });
   server = createServer(app);
   await registerRoutes(server, app);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -115,6 +126,71 @@ async function readAttempt(id = attemptId) {
   const [attempt] = await db.select().from(schema.testAttempts).where(eq(schema.testAttempts.id, id));
   return attempt;
 }
+
+test("BUG-REL-01: a timed-out older HTTP write cannot overwrite a newer confirmed save", async () => {
+  const attempt = await storage.createAttempt({
+    testId,
+    questionOrder: [firstQuestionId, secondQuestionId],
+    userId: ownerId,
+  });
+  assert.ok(attempt);
+  attemptIds.push(attempt.id);
+
+  let releaseOlderWrite!: () => void;
+  let markOlderRequestEntered!: () => void;
+  const olderRequestEntered = new Promise<void>((resolve) => { markOlderRequestEntered = resolve; });
+  let markOlderStorageWriteFinished!: () => void;
+  const olderStorageWriteFinished = new Promise<void>((resolve) => { markOlderStorageWriteFinished = resolve; });
+  holdNextAttemptUpdate = () => new Promise<void>((resolve) => {
+    releaseOlderWrite = resolve;
+    markOlderRequestEntered();
+  });
+
+  const updateAttempt = storage.updateAttempt.bind(storage);
+  storage.updateAttempt = async (id, userId, update) => {
+    const result = await updateAttempt(id, userId, update);
+    if (update.currentIndex === 0 && update.answers?.[String(firstQuestionId)] === "B") {
+      markOlderStorageWriteFinished();
+    }
+    return result;
+  };
+
+  try {
+    const path = `/api/attempts/${attempt.id}`;
+    const olderWrite = enqueueAttemptUpdate(attempt.id, async () => {
+      const response = await request(path, {
+        method: "PUT",
+        body: JSON.stringify({ expectedVersion: 0, currentIndex: 0, answers: { [firstQuestionId]: "B" } }),
+        signal: AbortSignal.timeout(100),
+      }, ownerId);
+      if (!response.ok) throw new Error(`Older write failed with ${response.status}`);
+    });
+
+    await olderRequestEntered;
+    await assert.rejects(olderWrite, /abort|timeout/i);
+
+    const newerWrite = enqueueAttemptUpdate(attempt.id, async () => {
+      const response = await request(path, {
+        method: "PUT",
+        body: JSON.stringify({ expectedVersion: 0, currentIndex: 1, answers: { [firstQuestionId]: "A", [secondQuestionId]: "B" } }),
+      }, ownerId);
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).writeVersion, 1);
+    });
+    await newerWrite;
+
+    releaseOlderWrite();
+    await olderStorageWriteFinished;
+    assert.deepEqual((await readAttempt(attempt.id))?.answers, {
+      [firstQuestionId]: "A",
+      [secondQuestionId]: "B",
+    });
+  } finally {
+    releaseOlderWrite?.();
+    storage.updateAttempt = updateAttempt;
+    holdNextAttemptUpdate = undefined;
+  }
+});
 
 test("BUG-03: finalization requires the owner session and calculates one linked result on the server", async () => {
   const path = `/api/attempts/${attemptId}/finalize`;
@@ -304,7 +380,7 @@ test("BUG-03: legacy result creation is unavailable and completed attempts rejec
   assert.equal(oldRoute.status, 404);
 
   const mutation = await request(`/api/attempts/${attemptId}`, {
-    method: "PUT", body: JSON.stringify({ answers: { [firstQuestionId]: "B" } }),
+    method: "PUT", body: JSON.stringify({ expectedVersion: 0, answers: { [firstQuestionId]: "B" } }),
   }, ownerId);
   assert.equal(mutation.status, 409);
   const unchanged = await readAttempt();

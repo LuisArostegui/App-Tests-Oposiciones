@@ -40,12 +40,16 @@ let failNextResultsRead = false;
 let missingAttemptQuestion = false;
 let failNextAttemptRead = false;
 let attemptReadCount = 0;
+let delayNextAttemptRead = false;
+let releaseAttemptRead;
 const attemptQuestions = [
   { id: 11, questionText: "Pregunta de prueba uno", answers: { A: "Correcta", B: "Incorrecta" }, correctAnswer: "A" },
   { id: 12, questionText: "Pregunta de prueba dos", answers: { A: "Incorrecta", B: "Correcta" }, correctAnswer: "B" },
 ];
+const initialAttemptQuestions = attemptQuestions.map((question) => ({ ...question }));
 
 function resetFixture() {
+  attemptQuestions.splice(0, attemptQuestions.length, ...initialAttemptQuestions.map((question) => ({ ...question })));
   expired = false;
   users["account-a"].tests = [{ id: "account-a-private.json", count: 1, category: "Private A" }];
   users["account-b"].tests = [{ id: "account-b-private.json", count: 1, category: "Private B" }];
@@ -76,6 +80,9 @@ function resetFixture() {
   missingAttemptQuestion = false;
   failNextAttemptRead = false;
   attemptReadCount = 0;
+  delayNextAttemptRead = false;
+  releaseAttemptRead?.();
+  releaseAttemptRead = undefined;
 }
 
 function readJson(request) {
@@ -124,6 +131,11 @@ const server = createServer(async (request, response) => {
     users["account-a"].tests[0] = { ...users["account-a"].tests[0], id: testId };
     return response.writeHead(204).end();
   }
+  if (url.pathname === "/__e2e/seed-question-count" && request.method === "POST") {
+    const { count } = await readJson(request);
+    users["account-a"].tests[0].count = count;
+    return response.writeHead(204).end();
+  }
   if (url.pathname === "/__e2e/omit-attempt-question" && request.method === "POST") {
     missingAttemptQuestion = true;
     return response.writeHead(204).end();
@@ -140,6 +152,15 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/__e2e/fail-next-attempt-read" && request.method === "POST") {
     failNextAttemptRead = true;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/delay-next-attempt-read" && request.method === "POST") {
+    delayNextAttemptRead = true;
+    return response.writeHead(204).end();
+  }
+  if (url.pathname === "/__e2e/release-attempt-read" && request.method === "POST") {
+    releaseAttemptRead?.();
+    releaseAttemptRead = undefined;
     return response.writeHead(204).end();
   }
   if (url.pathname === "/__e2e/delay-tests" && request.method === "POST") {
@@ -227,6 +248,10 @@ const server = createServer(async (request, response) => {
     nextAttemptSnapshot = await readJson(request);
     return response.writeHead(204).end();
   }
+  if (url.pathname === "/__e2e/bump-attempt-write-version" && request.method === "POST") {
+    if (attemptState) attemptState = { ...attemptState, writeVersion: attemptState.writeVersion + 1 };
+    return response.writeHead(204).end();
+  }
   if (url.pathname === "/api/auth/me") {
     const user = expired ? undefined : users[sid];
     return user ? respondJson(response, 200, { id: user.id, username: user.username }) : respondJson(response, 401, { message: "No autenticado" });
@@ -272,15 +297,22 @@ const server = createServer(async (request, response) => {
       ? respondJson(response, 200, availableQuestions.map((question) => ({ ...question, testId, category: ownedTest.category, userId: user.id })))
       : respondJson(response, 404, { message: "Test not found" });
   }
+  if (url.pathname.startsWith("/api/questions/") && request.method === "DELETE") {
+    const questionId = Number(url.pathname.slice("/api/questions/".length));
+    const index = attemptQuestions.findIndex((question) => question.id === questionId);
+    if (index >= 0) attemptQuestions.splice(index, 1);
+    if (index >= 0) users["account-a"].tests[0].count = attemptQuestions.length;
+    return response.writeHead(index >= 0 ? 204 : 404).end();
+  }
   if (url.pathname === "/api/attempts" && request.method === "GET") {
     const user = expired ? undefined : users[sid];
-    return user ? respondJson(response, 200, []) : respondJson(response, 401, { message: "No autenticado" });
+    return user ? respondJson(response, 200, attemptState?.userId === user.id ? [attemptState] : []) : respondJson(response, 401, { message: "No autenticado" });
   }
   if (url.pathname === "/api/attempts" && request.method === "POST") {
     const user = expired ? undefined : users[sid];
     if (!user) return respondJson(response, 401, { message: "No autenticado" });
     const body = await readJson(request);
-    attemptState = { id: 808, ...body, answers: nextAttemptSnapshot?.answers ?? {}, currentIndex: nextAttemptSnapshot?.currentIndex ?? 0, status: "in_progress", userId: user.id };
+    attemptState = { id: 808, ...body, answers: nextAttemptSnapshot?.answers ?? {}, currentIndex: nextAttemptSnapshot?.currentIndex ?? 0, writeVersion: 0, status: "in_progress", userId: user.id };
     nextAttemptSnapshot = null;
     return respondJson(response, 201, attemptState);
   }
@@ -290,6 +322,10 @@ const server = createServer(async (request, response) => {
     if (failNextAttemptRead) {
       failNextAttemptRead = false;
       return respondJson(response, 503, { message: "Error temporal al recuperar el intento" });
+    }
+    if (delayNextAttemptRead) {
+      delayNextAttemptRead = false;
+      await new Promise((resolve) => { releaseAttemptRead = resolve; });
     }
     return user && attemptState?.userId === user.id
       ? respondJson(response, 200, attemptState)
@@ -307,7 +343,11 @@ const server = createServer(async (request, response) => {
     if (delayAttemptSave) await new Promise((resolve) => { releaseAttemptSave = resolve; });
     if (delayAttemptSaveRequestNumber === attemptSaveRequests.length) await new Promise((resolve) => { releaseDelayedAttemptSave = resolve; });
     attemptSaveSnapshots.push(snapshot);
-    attemptState = { ...attemptState, ...snapshot };
+    if (snapshot.expectedVersion !== attemptState.writeVersion) {
+      return respondJson(response, 409, { message: "La versión del intento cambió mientras se guardaba", code: "ATTEMPT_VERSION_CONFLICT" });
+    }
+    const { expectedVersion: _expectedVersion, ...updates } = snapshot;
+    attemptState = { ...attemptState, ...updates, writeVersion: attemptState.writeVersion + 1 };
     return respondJson(response, 200, attemptState);
   }
   if (url.pathname === "/api/results" && request.method === "GET") {

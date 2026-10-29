@@ -302,6 +302,12 @@ export async function registerRoutes(
         if (existingAttempt?.status === "completed") {
           return res.status(409).json({ message: "El intento ya está finalizado" });
         }
+        if (existingAttempt && existingAttempt.writeVersion !== update.expectedVersion) {
+          return res.status(409).json({
+            message: "La versión del intento cambió mientras se guardaba",
+            code: "ATTEMPT_VERSION_CONFLICT",
+          });
+        }
         return res.status(404).json({ message: "Attempt not found" });
       }
       res.json(updated);

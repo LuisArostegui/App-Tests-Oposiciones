@@ -14,6 +14,7 @@ La cadena se ejecuta en orden de nombre:
 
 1. `20261028_000_baseline.sql` crea el esquema previo a la relación entre resultado e intento.
 2. `20261028_attempt_result_link.sql` añade `results.attempt_id`, nullable, con FK `ON DELETE SET NULL` y unicidad. Los resultados históricos siguen sin enlace; no se inventan asociaciones.
+3. `20261029_attempt_write_version.sql` añade una versión monotónica a los intentos para rechazar escrituras tardías basadas en una versión anterior.
 
 ```sh
 npm ci
