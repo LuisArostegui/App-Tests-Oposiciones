@@ -96,6 +96,7 @@ export function useUpdateAttempt() {
   const queryClient = useQueryClient();
 
   return usePrivateMutation({
+    networkMode: "always",
     mutationFn: async ({ id, ...updates }: { id: number; currentIndex?: number; answers?: Record<string, string> }) => {
       const url = buildUrl(api.attempts.update.path, { id });
       return enqueueAttemptUpdate(id, async () => {
@@ -103,12 +104,17 @@ export function useUpdateAttempt() {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(updates),
+          signal: AbortSignal.timeout(10_000),
         });
         if (!res.ok) await throwApiError(res);
         return api.attempts.update.responses[200].parse(await res.json());
       }, `update:${serializeAttemptSnapshot(updates)}`);
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData([api.attempts.get.path, variables.id], data);
+      queryClient.setQueryData<Array<typeof data>>([api.attempts.list.path], (attempts) =>
+        attempts?.map((attempt) => attempt.id === data.id ? data : attempt),
+      );
       queryClient.invalidateQueries({ queryKey: [api.attempts.list.path] });
       queryClient.invalidateQueries({ queryKey: [api.attempts.get.path, variables.id] });
     },

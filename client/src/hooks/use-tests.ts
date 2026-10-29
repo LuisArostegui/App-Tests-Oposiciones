@@ -119,8 +119,14 @@ export function useDeleteQuestion() {
       const res = await apiFetch(url, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete question");
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.tests.get.path] });
+    onSuccess: async (_data, questionId) => {
+      const question = queryClient.getQueryCache().findAll({ queryKey: [api.tests.get.path] })
+        .flatMap((query) => query.state.data as Array<{ id: number; testId: string }> | undefined ?? [])
+        .find((item) => item.id === questionId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: [api.tests.list.path] }),
+        queryClient.invalidateQueries({ queryKey: question ? [api.tests.get.path, question.testId] : [api.tests.get.path] }),
+      ]);
       toast({ title: "Pregunta Eliminada" });
     },
     onError: (error: Error) => toast({ title: "No se pudo eliminar el test", description: error.message, variant: "destructive" }),
