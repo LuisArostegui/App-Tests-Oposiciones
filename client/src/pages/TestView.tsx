@@ -9,7 +9,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
-import { ChevronLeft, ChevronRight, Flag, Shuffle, Home, Save } from "lucide-react";
+import { ChevronLeft, ChevronRight, Shuffle, Home, Save } from "lucide-react";
 import { type Question, type Result } from "@shared/schema";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
@@ -580,16 +580,13 @@ export default function TestView() {
       {/* Top Bar */}
       <div className="flex-shrink-0 z-10 bg-background/80 backdrop-blur-md border-b">
         <div className="max-w-4xl mx-auto px-3 md:px-4 h-12 md:h-16 flex items-center justify-between gap-2">
-          <Button variant="ghost" size="sm" onClick={handleSaveAndExit} disabled={isFinalizing || saveExitInFlight.current} data-testid="button-save-exit" className="px-2 md:px-3">
+          <Button variant="ghost" size="sm" aria-label="Guardar y salir" onClick={handleSaveAndExit} disabled={isFinalizing || saveExitInFlight.current} data-testid="button-save-exit" className="px-2 md:px-3">
             <Save className="w-4 h-4 md:mr-1" /> <span className="hidden md:inline">Guardar y Salir</span>
           </Button>
           <div className="font-mono font-medium text-sm text-muted-foreground">
             {currentIndex + 1} / {activeQuestions.length}
             <span className="hidden sm:inline ml-2 text-xs">({answeredCount} respondidas)</span>
           </div>
-          <Button variant="ghost" size="sm" className="text-muted-foreground px-2" data-testid="button-flag">
-            <Flag className="w-4 h-4" />
-          </Button>
         </div>
         <div role="status" aria-live="polite" data-testid="attempt-save-status" className="max-w-4xl mx-auto px-4 min-h-6 text-xs text-muted-foreground">
           {saveState === "pending" && "Cambios pendientes de guardar…"}
