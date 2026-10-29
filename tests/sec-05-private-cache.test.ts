@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { test } from "node:test";
 import { applyPersistedSessionTransition, beginPrivateSessionTransition, capturePrivateSessionEpoch, clearPrivateQueryData, finishPrivateSessionTransition, interruptSessionTransition, isPrivateSessionEpochCurrent, isSessionTransitioning, queryClient, receivePrivateSessionMessage, recoverInterruptedSessionTransitions } from "../client/src/lib/queryClient";
 import { withPrivateMutationCallbacks } from "../client/src/hooks/use-private-mutation";
-import { enqueueAttemptUpdate } from "../client/src/hooks/use-attempts";
+import { enqueueAttemptUpdate, updateAttemptWithVersion } from "../client/src/hooks/use-attempts";
 
 type WorkerEvent = {
   request?: Request;
@@ -351,4 +351,59 @@ test("SEC-05: queued attempt writes from the old session do not start after a se
   await assert.rejects(queued, /sesión cambió/i);
   assert.equal(staleWriteStarted, false);
   await finishPrivateSessionTransition(transitionId);
+});
+
+test("SEC-05: a late attempt-version read from the old session cannot repopulate cache or issue a PUT", async () => {
+  const attemptId = 904;
+  const attemptKey = ["/api/attempts/:id", attemptId];
+  queryClient.removeQueries({ queryKey: attemptKey });
+  const originalFetch = globalThis.fetch;
+  let markReadStarted!: () => void;
+  const readStarted = new Promise<void>((resolve) => { markReadStarted = resolve; });
+  let releaseRead!: (response: Response) => void;
+  const pendingRead = new Promise<Response>((resolve) => { releaseRead = resolve; });
+  let putCalls = 0;
+  globalThis.fetch = async (_input, init) => {
+    if ((init?.method ?? "GET").toUpperCase() === "GET") {
+      markReadStarted();
+      return pendingRead;
+    }
+    putCalls += 1;
+    return Response.json({ id: attemptId, writeVersion: 1, answers: { "11": "B" }, currentIndex: 1 });
+  };
+
+  const staleWrite = enqueueAttemptUpdate(attemptId, (sessionEpoch) =>
+    updateAttemptWithVersion(attemptId, { currentIndex: 1 }, queryClient, sessionEpoch),
+  );
+  try {
+    await readStarted;
+    await clearPrivateQueryData(false);
+    releaseRead(Response.json({ id: attemptId, writeVersion: 0, answers: {}, currentIndex: 0 }));
+    await assert.rejects(staleWrite, /sesión cambió/i);
+
+    assert.equal(queryClient.getQueryData(attemptKey), undefined);
+    assert.equal(putCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await clearPrivateQueryData(false);
+  }
+});
+
+test("SEC-05: an attempt update from a new session cannot reuse the previous session's deduplicated promise", async () => {
+  let releaseOldUpdate!: (value: string) => void;
+  const oldUpdateResult = new Promise<string>((resolve) => { releaseOldUpdate = resolve; });
+  let newSessionUpdateStarted = false;
+  const oldUpdate = enqueueAttemptUpdate(905, () => oldUpdateResult, "same-attempt-snapshot");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  await clearPrivateQueryData(false);
+  const newSessionUpdate = enqueueAttemptUpdate(905, async () => {
+    newSessionUpdateStarted = true;
+    return "account B";
+  }, "same-attempt-snapshot");
+  releaseOldUpdate("account A");
+
+  await oldUpdate;
+  assert.equal(await newSessionUpdate, "account B");
+  assert.equal(newSessionUpdateStarted, true);
 });
