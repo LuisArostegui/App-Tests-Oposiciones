@@ -100,6 +100,7 @@ async function createTemporaryDatabase(): Promise<{ containerName: string; datab
 }
 
 async function main(): Promise<void> {
+  const externalRel01BaseUrl = process.env.REL01_EXTERNAL_BASE_URL?.trim();
   const configuredTestUrl = rel01Mode
     ? process.env.REL01_DATABASE_URL
     : process.env.TEST_DATABASE_URL;
@@ -112,13 +113,20 @@ async function main(): Promise<void> {
       if (developmentUrl && sameDatabase(testDatabaseUrl, developmentUrl)) {
         throw new Error("TEST_DATABASE_URL apunta a la base de desarrollo; configura una base de datos distinta.");
       }
+      if (externalRel01BaseUrl) {
+        const externalUrl = new URL(externalRel01BaseUrl);
+        const testDatabaseName = new URL(testDatabaseUrl).pathname.slice(1);
+        if (!rel01Mode || externalUrl.protocol !== "https:" || !testDatabaseName.endsWith("_infra_test")) {
+          throw new Error("El modo REL01 externo exige HTTPS y una base temporal cuyo nombre termine en _infra_test.");
+        }
+      }
     } else {
       const temporaryDatabase = await createTemporaryDatabase();
       containerName = temporaryDatabase.containerName;
       testDatabaseUrl = temporaryDatabase.databaseUrl;
     }
 
-    const schemaExitCode = pushTestSchema(testDatabaseUrl);
+    const schemaExitCode = externalRel01BaseUrl ? 0 : pushTestSchema(testDatabaseUrl);
     if (schemaExitCode !== 0) {
       process.exitCode = schemaExitCode;
       return;
@@ -131,7 +139,13 @@ async function main(): Promise<void> {
         "--config=tests/rel01/playwright.config.mjs",
       ]
       : [tsxCliPath, "--test", ...testFiles];
-    const rel01Environment = rel01Mode
+    const rel01Environment = rel01Mode && externalRel01BaseUrl
+      ? {
+        TEST_DATABASE_URL: testDatabaseUrl,
+        REL01_EXTERNAL_BASE_URL: externalRel01BaseUrl,
+        REL01_KEEP_DATA: process.env.REL01_KEEP_DATA,
+      }
+      : rel01Mode
       ? {
         DATABASE_URL: testDatabaseUrl,
         TEST_DATABASE_URL: testDatabaseUrl,

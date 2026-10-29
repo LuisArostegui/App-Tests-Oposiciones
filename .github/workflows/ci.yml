@@ -83,3 +83,142 @@ jobs:
 
       - name: REL-01 real API and PostgreSQL flows
         run: npm run test:rel01
+
+  container-validation:
+    name: Production Docker and PostgreSQL validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: validation
+    env:
+      COMPOSE_PROJECT_NAME: opostest-infra01-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_USER: opostest_infra
+      POSTGRES_DB: opostest_infra_test
+      APP_URL: https://localhost:5443
+      APP_PORT: "55431"
+      TRUST_PROXY_HOPS: "1"
+      REGISTRATION_ENABLED: "true"
+      REQUEST_LOGGING_ENABLED: "false"
+      INFRA_TEST_DB_PORT: "55432"
+      INFRA_TEST_HTTPS_PORT: "5443"
+      REL01_EXTERNAL_BASE_URL: https://localhost:5443
+      REL01_KEEP_DATA: "true"
+      INFRA_PERSISTENCE_SNAPSHOT: test-results/infra01-persistence-${{ github.run_id }}-${{ github.run_attempt }}.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+          cache: npm
+
+      - name: Install dependencies for browser and migration validation
+        run: npm ci
+
+      - name: Install Chromium for the production HTTPS flow
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate disposable secrets
+        shell: bash
+        run: |
+          postgres_password=$(openssl rand -hex 24)
+          session_secret=$(openssl rand -hex 48)
+          echo "POSTGRES_PASSWORD=$postgres_password" >> "$GITHUB_ENV"
+          echo "SESSION_SECRET=$session_secret" >> "$GITHUB_ENV"
+          echo "DATABASE_URL=postgresql://opostest_infra:$postgres_password@postgres:5432/opostest_infra_test" >> "$GITHUB_ENV"
+          echo "REL01_DATABASE_URL=postgresql://opostest_infra:$postgres_password@127.0.0.1:55432/opostest_infra_test" >> "$GITHUB_ENV"
+          echo "INFRA_TEST_DATABASE_URL=postgresql://opostest_infra:$postgres_password@127.0.0.1:55432/opostest_infra_test" >> "$GITHUB_ENV"
+
+      - name: Fail clearly when required configuration is missing
+        shell: bash
+        run: |
+          set +e
+          secret_output=$(env -u SESSION_SECRET docker compose -f compose.prod.yaml config 2>&1)
+          secret_status=$?
+          url_output=$(env -u APP_URL docker compose -f compose.prod.yaml config 2>&1)
+          url_status=$?
+          set -e
+          test "$secret_status" -ne 0
+          test "$url_status" -ne 0
+          echo "$secret_output" | grep -q SESSION_SECRET
+          echo "$url_output" | grep -q APP_URL
+
+      - name: Validate production Compose configuration
+        run: docker compose -f compose.prod.yaml config --quiet
+
+      - name: Build clean production image
+        run: docker compose -f compose.prod.yaml build --no-cache app
+
+      - name: Start isolated PostgreSQL with its test volume
+        run: docker compose -f compose.prod.yaml -f compose.infra-test.yaml up -d postgres
+
+      - name: Wait for PostgreSQL readiness
+        shell: bash
+        run: |
+          for attempt in $(seq 1 60); do
+            if docker compose -f compose.prod.yaml -f compose.infra-test.yaml exec -T postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f compose.prod.yaml -f compose.infra-test.yaml logs postgres
+          exit 1
+
+      - name: Run migration integration checks against disposable databases
+        run: npm run test:infra-migrations
+
+      - name: Apply production migrations explicitly
+        run: docker compose -f compose.prod.yaml -f compose.infra-test.yaml run --rm --no-deps app npm run db:migrate
+
+      - name: Start production app and local HTTPS proxy
+        run: docker compose -f compose.prod.yaml -f compose.infra-test.yaml --profile infra-test up -d app infra-https-proxy
+
+      - name: Check loopback bindings and health
+        shell: bash
+        run: |
+          docker compose -f compose.prod.yaml -f compose.infra-test.yaml ps
+          docker compose -f compose.prod.yaml -f compose.infra-test.yaml port postgres 5432 | grep -q '127.0.0.1:'
+          docker compose -f compose.prod.yaml -f compose.infra-test.yaml port app 5000 | grep -q '127.0.0.1:'
+          curl --fail --insecure https://localhost:5443/healthz
+
+      - name: Test login, import, save, continue, and completion through HTTPS
+        run: npm run test:rel01
+
+      - name: Verify docker stop leaves no app process running
+        shell: bash
+        run: |
+          app_container=$(docker compose -f compose.prod.yaml -f compose.infra-test.yaml ps -q app)
+          docker stop "$app_container"
+          test "$(docker inspect --format '{{.State.Status}}' "$app_container")" = exited
+          if docker top "$app_container" >/dev/null 2>&1; then
+            echo "El contenedor detenido conserva procesos activos"
+            exit 1
+          fi
+          docker compose -f compose.prod.yaml -f compose.infra-test.yaml start app
+          for attempt in $(seq 1 60); do
+            if curl --fail --insecure https://localhost:5443/healthz >/dev/null; then break; fi
+            sleep 2
+          done
+
+      - name: Record persisted test data
+        run: npm run test:infra-persistence:snapshot
+
+      - name: Recreate app and PostgreSQL containers while retaining their volume
+        run: docker compose -f compose.prod.yaml -f compose.infra-test.yaml up -d --force-recreate postgres app
+
+      - name: Verify health and persisted accounts, questions, attempts, and history
+        shell: bash
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --insecure https://localhost:5443/healthz >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --insecure https://localhost:5443/healthz
+          npm run test:infra-persistence:assert
+          docker compose -f compose.prod.yaml -f compose.infra-test.yaml run --rm --no-deps app npm run db:migrate
+
+      - name: Stop isolated Compose project without deleting its volume
+        if: always()
+        run: docker compose -f compose.prod.yaml -f compose.infra-test.yaml --profile infra-test down --remove-orphans

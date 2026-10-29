@@ -1,459 +1,112 @@
-# Guía de Self-Hosting para OposTest Pro
+# Self-hosting de OposTest Pro con Docker Compose
 
-Esta guía te explica paso a paso cómo instalar OposTest Pro en tu propio servidor Ubuntu (VPS).
+Esta guía usa el despliegue de producción `compose.prod.yaml`. Es independiente de `compose.local.yaml`: PostgreSQL no publica puertos en el host y la aplicación queda disponible solo en `127.0.0.1:5000`, para un proxy inverso local.
 
-## Requisitos Previos
+## Requisitos
 
-- **Sistema Operativo**: Ubuntu 20.04 LTS o superior
-- **RAM**: Mínimo 1GB (recomendado 2GB)
-- **Almacenamiento**: Mínimo 10GB libres
-- **Acceso**: Usuario con permisos sudo
+- Docker Engine y Docker Compose v2.
+- Un dominio servido por un proxy inverso controlado con HTTPS (por ejemplo, Nginx o Caddy) en el mismo servidor. La aplicación usa cookies `Secure` en producción: no desactives HTTPS, `Secure` ni la protección de origen/CSRF.
+- Un clon del repositorio y espacio persistente para PostgreSQL.
 
----
+## Configuración inicial
 
-## Paso 1: Actualizar el Sistema
+No copies `.env` de desarrollo al servidor ni lo incluyas en una imagen. Crea un archivo local no versionado, `.env.production`, con permisos restrictivos. Genera primero un secreto:
 
-Primero, actualiza todos los paquetes del sistema:
-
-```bash
-sudo apt update && sudo apt upgrade -y
+```sh
+umask 077
+openssl rand -base64 48
 ```
 
----
-
-## Paso 2: Instalar Node.js 22
-
-OposTest Pro requiere Node.js `>=22.12.0 <23` y npm 10. El proyecto fija Node `22.23.2` en `.nvmrc` y CI. En Ubuntu, instala la rama 22:
-
-```bash
-# Instalar curl si no lo tienes
-sudo apt install -y curl
-
-# Añadir el repositorio de NodeSource
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-
-# Instalar Node.js
-sudo apt install -y nodejs
-
-# Verificar la instalación
-node --version  # Debería mostrar v22.x.x
-npm --version   # Debería mostrar 10.x.x
-```
-
----
-
-## Paso 3: Instalar PostgreSQL
-
-OposTest Pro usa PostgreSQL como base de datos.
-
-```bash
-# Instalar PostgreSQL
-sudo apt install -y postgresql postgresql-contrib
-
-# Iniciar el servicio
-sudo systemctl start postgresql
-sudo systemctl enable postgresql
-
-# Verificar que está funcionando
-sudo systemctl status postgresql
-```
-
-### Crear la Base de Datos
-
-```bash
-# Acceder a PostgreSQL como superusuario
-sudo -u postgres psql
-
-# Dentro de PostgreSQL, ejecuta estos comandos:
-CREATE USER opostest WITH PASSWORD 'tu_contraseña_segura';
-CREATE DATABASE opostest OWNER opostest;
-GRANT ALL PRIVILEGES ON DATABASE opostest TO opostest;
-
-# Salir de PostgreSQL
-\q
-```
-
-> ⚠️ **Importante**: Cambia `tu_contraseña_segura` por una contraseña fuerte y recuérdala para el archivo `.env`.
-
----
-
-## Paso 4: Instalar Git
-
-```bash
-sudo apt install -y git
-```
-
----
-
-## Paso 5: Clonar el Repositorio
-
-```bash
-# Crear directorio para la aplicación
-sudo mkdir -p /var/www
-cd /var/www
-
-# Clonar el repositorio (reemplaza con tu repositorio)
-sudo git clone https://tu-repositorio/opostest-pro.git opostest
-cd opostest
-
-# Dar permisos al usuario actual
-sudo chown -R $USER:$USER /var/www/opostest
-```
-
----
-
-## Paso 6: Configurar Variables de Entorno
-
-```bash
-# Copiar el archivo de ejemplo
-cp .env.example .env
-
-# Editar el archivo con nano (o tu editor preferido)
-nano .env
-```
-
-Modifica los siguientes valores en el archivo `.env`:
+Usa el valor generado como `SESSION_SECRET` y sustituye todos los marcadores. La contraseña de PostgreSQL forma parte de una URL: usa caracteres compatibles con URL o codifícala antes de ponerla en `DATABASE_URL`.
 
 ```env
-# Base de datos - usa los datos que configuraste en el Paso 3
-DATABASE_URL=postgresql://opostest:tu_contraseña_segura@localhost:5432/opostest
-
-# Puerto (5000 por defecto, cámbialo si es necesario)
-PORT=5000
-
-# IMPORTANTE: Genera una clave secreta segura para las sesiones de usuario
-# Ejecuta: openssl rand -base64 48 y guarda el resultado solo en .env
-SESSION_SECRET=
-
-# El ejemplo de Nginx de esta guía tiene un salto de proxy controlado.
-# Mantén 0 si expones directamente la aplicación o cambia solo tras limitar el acceso al proxy.
+POSTGRES_USER=opostest_prod
+POSTGRES_PASSWORD=CAMBIA_ESTO_POR_UN_SECRETO_LARGO
+POSTGRES_DB=opostest
+DATABASE_URL=postgresql://opostest_prod:CAMBIA_ESTO_POR_UN_SECRETO_LARGO@postgres:5432/opostest
+APP_PORT=5000
+SESSION_SECRET=PEGA_AQUI_EL_VALOR_GENERADO_DE_AL_MENOS_32_CARACTERES
+APP_URL=https://opostest.example.com
 TRUST_PROXY_HOPS=1
-
-# Para una instancia privada puedes desactivar los logs de solicitudes API.
-REQUEST_LOGGING_ENABLED=false
-
-# El registro de nuevas cuentas está deshabilitado en producción por defecto.
-# Cámbialo a true solo mientras quieras permitir altas y reinicia el servidor.
 REGISTRATION_ENABLED=false
-
-# Nombre de tu aplicación
-APP_NAME=OposTest Pro
+REQUEST_LOGGING_ENABLED=true
 ```
 
-> **Importante**: El `SESSION_SECRET` es obligatorio en producción y se usa para firmar las sesiones de usuario. Genera una clave segura con `openssl rand -base64 48`, guárdala solo en `.env` y nunca la compartas. La aplicación rechaza valores ausentes, de ejemplo, débiles y el secreto fijo de desarrollo. `REGISTRATION_ENABLED` vale `false` por defecto en producción; configúralo explícitamente a `true` y reinicia el servidor para permitir nuevas cuentas.
+`APP_PORT` es el puerto local que usa el proxy para llegar a la aplicación; el valor habitual es `5000`. `APP_URL` debe ser el origen público exacto, sin barra final. `TRUST_PROXY_HOPS=1` es correcto solo cuando hay exactamente un proxy inverso controlado delante de la aplicación; usa `0` si no lo hay. Compose rechaza el arranque con un mensaje explícito si faltan `APP_PORT`, `DATABASE_URL`, `SESSION_SECRET`, `APP_URL`, `TRUST_PROXY_HOPS` o las credenciales de PostgreSQL.
 
-Guarda el archivo: `Ctrl + X`, luego `Y`, luego `Enter`.
+Configura el proxy para pasar `Host` y `X-Forwarded-Proto`, conservar HTTPS hacia el navegador y enviar tráfico a `http://127.0.0.1:5000`. No expongas el puerto de PostgreSQL ni cambies el binding de la aplicación a todas las interfaces sin añadir una capa de red equivalente.
 
----
+## Primera instalación
 
-## Paso 7: Instalar Dependencias
+Construye la imagen y arranca únicamente PostgreSQL. El proyecto dedicado evita afectar a contenedores de otros despliegues:
 
-```bash
-# Instalar exactamente las dependencias de package-lock.json
-npm ci
-
-# Esto puede tardar unos minutos
+```sh
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml build app
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml up -d postgres
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml ps
 ```
 
----
+Cuando `postgres` esté saludable, aplica las migraciones versionadas. Los scripts son trabajos explícitos; nunca se ejecutan al arrancar `app`.
 
-## Paso 8: Preparar el esquema
-
-`npm run db:push` sincroniza el esquema directamente y se reserva para una base local/de desarrollo vacía. No lo uses como mecanismo de actualización de una instalación de producción. Las actualizaciones versionadas están en `migrations/`; aplica cada SQL una sola vez siguiendo su README, con copia de seguridad y revisión previa. Este repositorio todavía no tiene una cadena de migraciones que cree todo el esquema desde cero.
-
-Para la primera creación de una base de producción vacía, prepara y revisa el esquema antes de abrir el servicio:
-
-```bash
-# Sincronizar el esquema actual solo en una base nueva, sin datos que preservar
-npm run db:push
+```sh
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml run --rm --no-deps app npm run db:migrate
 ```
 
-> **Importante**: No repitas `db:push` para actualizar producción. Antes de cada actualización, revisa y aplica el SQL versionado correspondiente en `migrations/`.
+`db:migrate` prepara una base vacía. `db:baseline` se reserva para adoptar una instalación existente que ya contiene el esquema, tras copia de seguridad y validación; ejecútalo una sola vez antes de `db:migrate`. Para una actualización posterior, realiza una copia de seguridad, revisa el cambio y ejecuta únicamente `db:migrate`. No uses `db:push` para actualizar producción.
 
----
+Arranca la aplicación y verifica ambos servicios:
 
-## Paso 9: Compilar la Aplicación
-
-```bash
-# Construir la versión de producción
-npm run build
+```sh
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml up -d app
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml ps
+curl --fail http://127.0.0.1:5000/healthz
 ```
 
----
+El endpoint de salud debe devolver `200` antes de considerar el servicio disponible. Comprueba también el acceso a través del dominio HTTPS del proxy.
 
-## Paso 10: Probar la Aplicación
+## Primera cuenta
 
-```bash
-# Ejecutar en modo producción
-npm start
+El registro está deshabilitado por defecto. Para crear la primera cuenta, cambia temporalmente `REGISTRATION_ENABLED=true` en `.env.production`, recrea **solo** `app`, registra la cuenta mediante el dominio HTTPS y vuelve inmediatamente a `false`:
+
+```sh
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml up -d --force-recreate app
+# Registra la primera cuenta en https://opostest.example.com
+# Cambia REGISTRATION_ENABLED=false en .env.production
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml up -d --force-recreate app
 ```
 
-Abre tu navegador y visita `http://IP_DE_TU_SERVIDOR:5000`. Deberías ver la página de inicio de sesión. Registra tu primera cuenta de usuario para empezar a usar la aplicación.
+No mantengas el registro habilitado ni reduzcas las protecciones de cookie u origen para evitar este paso.
 
-Presiona `Ctrl + C` para detener la aplicación.
+## Actualizar o recrear
 
----
+Antes de actualizar, haz una copia de seguridad y conserva `.env.production` fuera de Git:
 
-## Paso 11: Configurar como Servicio
-
-Tienes dos opciones para ejecutar la aplicación como servicio: **PM2** (más fácil) o **systemd** (más robusto).
-
-### Opción A: Usar PM2 (Recomendado para principiantes)
-
-PM2 es un gestor de procesos fácil de usar:
-
-```bash
-# Instalar PM2 globalmente
-sudo npm install -g pm2
-
-# Iniciar la aplicación (IMPORTANTE: usar --cwd para establecer el directorio correcto)
-pm2 start /var/www/opostest/dist/index.cjs --name opostest --cwd /var/www/opostest
-
-# Configurar para que inicie automáticamente al reiniciar el servidor
-pm2 startup
-pm2 save
-
-# Comandos útiles:
-pm2 status              # Ver estado
-pm2 logs opostest       # Ver logs en tiempo real
-pm2 restart opostest    # Reiniciar aplicación
-pm2 stop opostest       # Detener aplicación
-pm2 delete opostest     # Eliminar y volver a crear si hay problemas
-```
-
-> **Importante**: Usa siempre `--cwd /var/www/opostest` para que PM2 ejecute la aplicación desde el directorio correcto donde está el archivo `.env`.
-
-### Opción B: Usar systemd (Más robusto)
-
-Para que la aplicación se ejecute automáticamente al iniciar el servidor:
-
-```bash
-# Crear archivo de servicio
-sudo nano /etc/systemd/system/opostest.service
-```
-
-Pega el siguiente contenido:
-
-```ini
-[Unit]
-Description=OposTest Pro
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=/var/www/opostest
-ExecStart=/usr/bin/node dist/index.cjs
-Restart=on-failure
-RestartSec=10
-Environment=NODE_ENV=production
-
-# Cargar variables de entorno desde .env
-EnvironmentFile=/var/www/opostest/.env
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Guarda el archivo y ejecuta:
-
-```bash
-# Dar permisos a www-data
-sudo chown -R www-data:www-data /var/www/opostest
-
-# Recargar systemd
-sudo systemctl daemon-reload
-
-# Habilitar el servicio
-sudo systemctl enable opostest
-
-# Iniciar el servicio
-sudo systemctl start opostest
-
-# Verificar el estado
-sudo systemctl status opostest
-```
-
----
-
-## Paso 12: Configurar Nginx (Proxy Inverso) - Opcional pero Recomendado
-
-Nginx permite usar el puerto 80/443 y añadir SSL.
-
-Si esta es la única capa de proxy inverso y el puerto de la aplicación no está disponible desde Internet, configura `TRUST_PROXY_HOPS=1`. Para acceso directo usa `TRUST_PROXY_HOPS=0`. La aplicación no confía en cabeceras de proxy por defecto. En producción las cookies de sesión requieren HTTPS.
-
-```bash
-# Instalar Nginx
-sudo apt install -y nginx
-
-# Crear configuración del sitio
-sudo nano /etc/nginx/sites-available/opostest
-```
-
-Pega el siguiente contenido:
-
-```nginx
-server {
-    listen 80;
-    server_name tu-dominio.com;  # Cambia por tu dominio o IP
-
-    location / {
-        proxy_pass http://localhost:5000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
-}
-```
-
-Activa la configuración:
-
-```bash
-# Crear enlace simbólico
-sudo ln -s /etc/nginx/sites-available/opostest /etc/nginx/sites-enabled/
-
-# Verificar la configuración
-sudo nginx -t
-
-# Reiniciar Nginx
-sudo systemctl restart nginx
-```
-
----
-
-## Paso 13: Configurar SSL con Let's Encrypt - Opcional
-
-Para añadir HTTPS gratuito:
-
-```bash
-# Instalar Certbot
-sudo apt install -y certbot python3-certbot-nginx
-
-# Obtener certificado (reemplaza con tu dominio y email)
-sudo certbot --nginx -d tu-dominio.com -m tu@email.com --agree-tos
-
-# El certificado se renovará automáticamente
-```
-
----
-
-## Paso 14: Configurar el Firewall
-
-```bash
-# Instalar ufw si no está instalado
-sudo apt install -y ufw
-
-# Permitir SSH (¡importante!)
-sudo ufw allow ssh
-
-# Permitir HTTP y HTTPS
-sudo ufw allow 'Nginx Full'
-
-# Si no usas Nginx, permite el puerto 5000 directamente
-# sudo ufw allow 5000
-
-# Activar el firewall
-sudo ufw enable
-
-# Verificar reglas
-sudo ufw status
-```
-
----
-
-## Comandos Útiles
-
-### Ver logs de la aplicación
-```bash
-sudo journalctl -u opostest -f
-```
-
-### Reiniciar la aplicación
-```bash
-sudo systemctl restart opostest
-```
-
-### Actualizar la aplicación
-```bash
-cd /var/www/opostest
+```sh
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > opostest-$(date +%F).dump
 git pull
-npm ci
-npm run build
-sudo systemctl restart opostest
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml build
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml run --rm --no-deps app npm run db:migrate
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml up -d --force-recreate app
 ```
 
-### Ver estado del servicio
-```bash
-sudo systemctl status opostest
+Para recrear todos los contenedores conservando datos:
+
+```sh
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml up -d --build --force-recreate
 ```
 
----
+## Operación y datos
 
-## Solución de Problemas
+```sh
+# Estado y logs
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml ps
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml logs -f app
 
-### La aplicación no inicia
-```bash
-# Ver logs detallados
-sudo journalctl -u opostest -n 50
+# Detener contenedores sin borrar datos
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml stop
 
-# Verificar que PostgreSQL está funcionando
-sudo systemctl status postgresql
-
-# Probar la conexión a la base de datos
-psql -U opostest -d opostest -h localhost
+# Eliminar contenedores y red, conservando el volumen PostgreSQL
+docker compose --project-name opostest-prod --env-file .env.production -f compose.prod.yaml down
 ```
 
-### Error de conexión a la base de datos
-1. Verifica que `DATABASE_URL` en `.env` es correcta
-2. Verifica que PostgreSQL está corriendo: `sudo systemctl status postgresql`
-3. Verifica el usuario y contraseña de PostgreSQL
-
-### Error: DATABASE_URL must be set
-Este error normalmente indica que la aplicación no encuentra el archivo `.env`. Verifica que:
-1. El archivo `.env` existe en la raíz del proyecto (`/var/www/opostest/.env`)
-2. El archivo tiene la variable `DATABASE_URL` configurada
-3. Si usas PM2, simplemente reinicia: `pm2 restart opostest`
-
-> **Nota técnica**: La aplicación carga automáticamente dotenv al inicio del bundle de producción, por lo que no necesitas exportar las variables manualmente.
-
-### Puerto 5000 ya en uso
-Cambia el puerto en `.env`:
-```env
-PORT=3000
-```
-Y reinicia: `sudo systemctl restart opostest`
-
-### Permisos denegados
-```bash
-sudo chown -R www-data:www-data /var/www/opostest
-```
-
----
-
-## Copias de Seguridad
-
-### Exportar la base de datos
-```bash
-pg_dump -U opostest -d opostest > backup_$(date +%Y%m%d).sql
-```
-
-### Importar la base de datos
-```bash
-psql -U opostest -d opostest < backup_20240115.sql
-```
-
----
-
-## Soporte
-
-Si tienes problemas, revisa los logs con:
-```bash
-sudo journalctl -u opostest -f
-```
-
-¡Tu aplicación OposTest Pro ya está lista para usar en tu propio servidor!
+El volumen con los datos se llama `opostest-prod_postgres_prod_data`. `down` no lo borra. **No ejecutes `docker compose down -v`** salvo que quieras eliminar definitivamente la base de datos y dispongas de una copia verificada; `-v` borra el volumen persistente.

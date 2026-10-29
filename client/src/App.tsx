@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Switch, Route, useLocation, useSearch, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -130,6 +130,7 @@ function AppContent() {
   const [location] = useLocation();
   const { isAuthenticated } = useAuth();
   const serviceWorker = useServiceWorker();
+  const completeSplash = useCallback(() => setShowSplash(false), []);
 
   const isTestView = location.startsWith("/test/");
   const isAuthPage = location === "/login" || location === "/register";
@@ -137,7 +138,7 @@ function AppContent() {
   return (
     <>
       {showSplash && (
-        <ConnectionStatus onComplete={() => setShowSplash(false)} />
+        <ConnectionStatus onComplete={completeSplash} />
       )}
       <Toaster />
       {serviceWorker.isUpdateAvailable && (

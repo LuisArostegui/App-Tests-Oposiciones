@@ -1,0 +1,21 @@
+# Use an allow-list so a local secret or development artifact cannot enter the
+# build context by accident. The build needs only these source inputs.
+*
+!package.json
+!package-lock.json
+!client/
+!client/**
+!server/
+!server/**
+!shared/
+!shared/**
+!script/
+!script/**
+!migrations/
+!migrations/**
+!components.json
+!drizzle.config.ts
+!postcss.config.js
+!tailwind.config.ts
+!tsconfig.json
+!vite.config.ts
