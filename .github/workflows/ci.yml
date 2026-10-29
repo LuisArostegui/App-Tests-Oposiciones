@@ -219,6 +219,17 @@ jobs:
           npm run test:infra-persistence:assert
           docker compose -f compose.prod.yaml -f compose.infra-test.yaml run --rm --no-deps app npm run db:migrate
 
+      - name: Capture Compose diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          docker compose -f compose.prod.yaml -f compose.infra-test.yaml --profile infra-test ps -a || true
+          docker compose -f compose.prod.yaml -f compose.infra-test.yaml --profile infra-test logs --tail=200 app postgres infra-https-proxy || true
+          app_container=$(docker compose -f compose.prod.yaml -f compose.infra-test.yaml ps -q app)
+          if [ -n "$app_container" ]; then
+            docker inspect --format='{{json .State}}' "$app_container" || true
+          fi
+
       - name: Stop isolated Compose project without deleting its volume
         if: always()
         run: docker compose -f compose.prod.yaml -f compose.infra-test.yaml --profile infra-test down --remove-orphans
